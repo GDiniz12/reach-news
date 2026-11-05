@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String             @id @default(cuid())
+  name         String
+  email        String             @unique
+  passwordHash String
+  avatarUrl    String?
+  role         String             @default("user") // "user" | "admin"
+  interests    Json               @default("[]")   // string[] of selected category/topic IDs from onboarding
+  affinityMap  Json               @default("{}")   // Record<string, number> dynamic score learned by the algorithm
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  savedStories SavedStory[]
+  chatMessages StoryChatMessage[]
+  interactions UserInteraction[]
+}
+
+model UserInteraction {
+  id        String   @id @default(cuid())
+  userId    String
+  storyId   String?
+  category  String
+  topicTag  String?
+  eventType String   // "view" (+2) | "dwell" (+4) | "bookmark" (+6) | "chat" (+5) | "radar" (+5)
+  weight    Float    @default(1.0)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model SystemConfig {
+  id               String   @id @default("default")
+  omnirouteBaseUrl String   @default("http://localhost:20128/v1")
+  omnirouteApiKey  String   @default("sk-omniroute-local")
+  omnirouteModel   String   @default("auto")
+  cronEnabled      Boolean  @default(true)
+  cronIntervalMin  Int      @default(30)
+  updatedAt        DateTime @updatedAt
+}
+
+model Story {
+  id                 String             @id @default(cuid())
+  slug               String             @unique
+  category           String             // "popular" | "technology" | "sports" | "entertainment" | "science" | "politics" | "crime" | "economics" | "videogames"
+  topicTagPt         String             // e.g. "IA Corporativa"
+  topicTagEn         String             // e.g. "Enterprise AI"
+  titlePt            String
+  titleEn            String
+  summaryPt          String             // Short card summary (2-3 sentences)
+  summaryEn          String
+  bulletPointsPt     Json               // string[] (Particle style 5W1H / key takeaways)
+  bulletPointsEn     Json               // string[]
+  perspectivesPt     Json               // Array<{ label: string, stance: string, summary: string }>
+  perspectivesEn     Json               // Array<{ label: string, stance: string, summary: string }>
+  fullArticlePt      String             @db.Text // Detailed journalistic article in Markdown
+  fullArticleEn      String             @db.Text
+  imageUrl           String
+  dominantColor      String             @default("#1d4ed8") // Hex color for the vibrant card gradient
+  secondaryColor     String             @default("#1e3a8a")
+  articleCount       Int                @default(12)
+  isRadarGenerated   Boolean            @default(false)
+  radarQuery         String?
+  publishedAt        DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  sources            StorySource[]
+  savedBy            SavedStory[]
+  chatMessages       StoryChatMessage[]
+}
+
+model StorySource {
+  id          String   @id @default(cuid())
+  storyId     String
+  story       Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  name        String   // e.g. "The Verge", "Reuters", "G1"
+  title       String
+  url         String
+  domain      String
+  publishedAt String?
+  snippet     String?
+}
+
+model SavedStory {
+  id        String   @id @default(cuid())
+  userId    String
+  storyId   String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story     Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, storyId])
+}
+
+model StoryChatMessage {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String?
+  role      String   // "user" | "assistant"
+  content   String   @db.Text
+  story     Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+}
