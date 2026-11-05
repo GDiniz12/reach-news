@@ -19,12 +19,12 @@ const PORT = Number(process.env.PORT || 4001);
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
-app.get('/api/health', (_req, res) => {
+app.get(['/api/health', '/reach/api/health'], (_req, res) => {
   res.json({ status: 'ok', service: 'reach.news API', timestamp: new Date().toISOString() });
 });
 
-app.use('/api/auth', authRoutes);
-app.use('/api', storyRoutes);
+app.use(['/api/auth', '/reach/api/auth'], authRoutes);
+app.use(['/api', '/reach/api'], storyRoutes);
 
 // Background Scheduler: Runs every 30 minutes ('*/30 * * * *')
 // 1. Deletes stories older than 7 days (1 week)

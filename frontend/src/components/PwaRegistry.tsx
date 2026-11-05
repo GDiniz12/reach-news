@@ -10,6 +10,21 @@ export function PwaRegistry() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    // 0. Automatically inject 'ngrok-skip-browser-warning' on any fetch call targeting an ngrok tunnel
+    const origFetch = window.fetch;
+    if (!(window as any).__reachNgrokPatched) {
+      (window as any).__reachNgrokPatched = true;
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (urlStr.includes('ngrok')) {
+          const headers = new Headers(init?.headers || {});
+          headers.set('ngrok-skip-browser-warning', 'true');
+          return origFetch(input, { ...init, headers });
+        }
+        return origFetch(input, init);
+      };
+    }
+
     // 1. Register PWA Service Worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
