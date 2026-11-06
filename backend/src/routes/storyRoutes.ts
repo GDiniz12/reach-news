@@ -3,6 +3,9 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import {
   researchAndSynthesizeStory,
+  synthesize24hBreakingStory,
+  saveSynthesizedStoryIfUnique,
+  cleanExistingDuplicateStories,
   answerStoryQuestion,
   checkOmniRouteStatus,
   getSystemConfig,
@@ -11,6 +14,7 @@ import {
   planSmartSearchAngles,
 } from '../services/omnirouteService';
 import { CATEGORY_QUERIES } from '../services/searchTools';
+import { ensureSeededStories } from '../services/seedService';
 import { authenticateToken, AuthRequest } from './authRoutes';
 
 const router = Router();
@@ -179,34 +183,7 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
           lang: targetLang,
           isRadar: false,
         })
-          .then((generated) =>
-            prisma.story.create({
-              data: {
-                slug: generated.slug,
-                category: topCategory,
-                topicTagPt: generated.topicTagPt,
-                topicTagEn: generated.topicTagEn,
-                titlePt: generated.titlePt,
-                titleEn: generated.titleEn,
-                summaryPt: generated.summaryPt,
-                summaryEn: generated.summaryEn,
-                bulletPointsPt: generated.bulletPointsPt,
-                bulletPointsEn: generated.bulletPointsEn,
-                perspectivesPt: generated.perspectivesPt,
-                perspectivesEn: generated.perspectivesEn,
-                fullArticlePt: generated.fullArticlePt,
-                fullArticleEn: generated.fullArticleEn,
-                imageUrl: generated.imageUrl,
-                dominantColor: generated.dominantColor,
-                secondaryColor: generated.secondaryColor,
-                articleCount: generated.articleCount,
-                isRadarGenerated: false,
-                sources: {
-                  create: generated.sources,
-                },
-              },
-            })
-          )
+          .then((generated) => saveSynthesizedStoryIfUnique(generated))
           .catch((e) => console.warn('[ForYou AI Engine] Background synthesis warning:', e.message))
           .finally(() => activeRecommendationJobs.delete(topCategory));
       }
@@ -222,15 +199,50 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
   }
 });
 
-// GET /api/stories - List stories with optional category or search filter
+// Feed list selection fields (omits giant fullArticle markdown to maximize performance and prevent payload timeouts)
+const FEED_STORY_SELECT = {
+  id: true,
+  slug: true,
+  category: true,
+  topicTagPt: true,
+  topicTagEn: true,
+  titlePt: true,
+  titleEn: true,
+  summaryPt: true,
+  summaryEn: true,
+  bulletPointsPt: true,
+  bulletPointsEn: true,
+  perspectivesPt: true,
+  perspectivesEn: true,
+  imageUrl: true,
+  dominantColor: true,
+  secondaryColor: true,
+  articleCount: true,
+  isRadarGenerated: true,
+  radarQuery: true,
+  publishedAt: true,
+  sources: true,
+} as const;
+
+// GET /api/stories - List stories with optional category, 24h timeframe, or search filter
 router.get('/stories', async (req: Request, res: Response) => {
   try {
-    const { category, q, limit = '30' } = req.query;
+    const { category, q, limit = '30', timeframe, lang = 'pt' } = req.query;
 
+    const catKey = category ? String(category).toLowerCase().trim() : undefined;
+    const is24h = catKey === 'last_24h' || timeframe === '24h';
     const where: Record<string, unknown> = {};
-    if (category && category !== 'popular' && category !== 'all') {
-      where.category = String(category);
+
+    if (is24h) {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      where.publishedAt = { gte: twentyFourHoursAgo };
+      if (catKey && catKey !== 'last_24h' && catKey !== 'popular' && catKey !== 'all') {
+        where.category = catKey;
+      }
+    } else if (catKey && catKey !== 'popular' && catKey !== 'all') {
+      where.category = catKey;
     }
+
     if (q && String(q).trim().length > 0) {
       const search = String(q).trim();
       const keywords = search
@@ -259,14 +271,35 @@ router.get('/stories', async (req: Request, res: Response) => {
       where.OR = orConditions;
     }
 
-    const stories = await prisma.story.findMany({
+    let stories = await prisma.story.findMany({
       where,
-      include: {
-        sources: true,
-      },
+      select: FEED_STORY_SELECT,
       orderBy: { publishedAt: 'desc' },
       take: Number(limit),
     });
+
+    // Self-healing fallback: If popular/initial feed has 0 stories, auto-seed and return stories
+    if (stories.length === 0 && (!catKey || catKey === 'popular' || catKey === 'all') && !q) {
+      const count = await prisma.story.count();
+      if (count === 0) {
+        console.log('[GET /stories] Database empty on popular feed. Auto-populating initial seed stories...');
+        await ensureSeededStories();
+        stories = await prisma.story.findMany({
+          select: FEED_STORY_SELECT,
+          orderBy: { publishedAt: 'desc' },
+          take: Number(limit),
+        });
+      }
+    }
+
+    // Proactive AI synthesis: if 24h session is requested and has fewer than 2 stories, synthesize fresh 24h news in background
+    if (is24h && stories.length < 2 && !activeRecommendationJobs.has('last_24h')) {
+      activeRecommendationJobs.add('last_24h');
+      synthesize24hBreakingStory({ lang: lang === 'en' ? 'en' : 'pt' })
+        .then((generated) => saveSynthesizedStoryIfUnique(generated))
+        .catch((e) => console.warn('[24h AI Engine] Background synthesis warning:', e.message))
+        .finally(() => activeRecommendationJobs.delete('last_24h'));
+    }
 
     res.json({ stories });
   } catch (err) {
@@ -275,12 +308,35 @@ router.get('/stories', async (req: Request, res: Response) => {
 });
 
 // GET /api/stories/:idOrSlug - Single story details + sources + chat history
+// Enhanced with multi-tier resilient lookup: handles URL decoding, case-insensitivity,
+// collapsed dashes, random hash prefixes, and keyword fallbacks.
 router.get('/stories/:idOrSlug', async (req: Request, res: Response) => {
   try {
-    const idOrSlug = String(req.params.idOrSlug);
-    const story = await prisma.story.findFirst({
+    const rawParam = String(req.params.idOrSlug || '').trim();
+    let decodedParam = rawParam;
+    try {
+      decodedParam = decodeURIComponent(rawParam).trim();
+    } catch {
+      // Keep rawParam if decodeURIComponent fails
+    }
+
+    const lowered = decodedParam.toLowerCase();
+    const normalizedDashes = lowered.replace(/-+/g, '-');
+    const withoutTrailingSlash = decodedParam.replace(/\/+$/, '');
+
+    // Tier 1: Direct ID or exact slug lookup (case-insensitive)
+    let story = await prisma.story.findFirst({
       where: {
-        OR: [{ id: idOrSlug }, { slug: idOrSlug }],
+        OR: [
+          { id: rawParam },
+          { id: decodedParam },
+          { id: withoutTrailingSlash },
+          { slug: { equals: rawParam, mode: 'insensitive' } },
+          { slug: { equals: decodedParam, mode: 'insensitive' } },
+          { slug: { equals: lowered, mode: 'insensitive' } },
+          { slug: { equals: normalizedDashes, mode: 'insensitive' } },
+          { slug: { equals: withoutTrailingSlash, mode: 'insensitive' } },
+        ],
       },
       include: {
         sources: true,
@@ -290,6 +346,54 @@ router.get('/stories/:idOrSlug', async (req: Request, res: Response) => {
         },
       },
     });
+
+    // Tier 2: Match by core slug prefix (without random 5-char hash like '-rg9m5')
+    if (!story && lowered.length > 8) {
+      const coreSlug = lowered.replace(/-[a-z0-9]{4,7}$/i, '');
+      if (coreSlug.length > 5) {
+        story = await prisma.story.findFirst({
+          where: {
+            slug: { startsWith: coreSlug, mode: 'insensitive' },
+          },
+          include: {
+            sources: true,
+            chatMessages: {
+              orderBy: { createdAt: 'asc' },
+              take: 30,
+            },
+          },
+        });
+      }
+    }
+
+    // Tier 3: Keyword fallback on title if the URL was partially truncated by an external app
+    if (!story && lowered.length > 10) {
+      const keywords = lowered
+        .split('-')
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 4)
+        .slice(0, 4);
+
+      if (keywords.length >= 2) {
+        story = await prisma.story.findFirst({
+          where: {
+            AND: keywords.map((kw) => ({
+              OR: [
+                { titlePt: { contains: kw, mode: 'insensitive' } },
+                { titleEn: { contains: kw, mode: 'insensitive' } },
+              ],
+            })),
+          },
+          include: {
+            sources: true,
+            chatMessages: {
+              orderBy: { createdAt: 'asc' },
+              take: 30,
+            },
+          },
+        });
+      }
+    }
 
     if (!story) {
       res.status(404).json({ error: 'Notícia não encontrada.' });
@@ -328,50 +432,15 @@ router.post('/radar/research', async (req: Request, res: Response) => {
       try {
         const generated = await researchAndSynthesizeStory({
           query: angleQuery,
-          category: String(category) === 'popular' ? 'technology' : String(category),
+          category: String(category || 'popular'),
           lang: targetLang,
           isRadar: true,
         });
 
-        const saved = await prisma.story.create({
-          data: {
-            slug: generated.slug,
-            category: generated.category,
-            topicTagPt: generated.topicTagPt,
-            topicTagEn: generated.topicTagEn,
-            titlePt: generated.titlePt,
-            titleEn: generated.titleEn,
-            summaryPt: generated.summaryPt,
-            summaryEn: generated.summaryEn,
-            bulletPointsPt: generated.bulletPointsPt,
-            bulletPointsEn: generated.bulletPointsEn,
-            perspectivesPt: generated.perspectivesPt,
-            perspectivesEn: generated.perspectivesEn,
-            fullArticlePt: generated.fullArticlePt,
-            fullArticleEn: generated.fullArticleEn,
-            imageUrl: generated.imageUrl,
-            dominantColor: generated.dominantColor,
-            secondaryColor: generated.secondaryColor,
-            articleCount: generated.articleCount,
-            isRadarGenerated: true,
-            radarQuery: cleanQuery,
-            sources: {
-              create: generated.sources.map((s) => ({
-                name: s.name,
-                title: s.title,
-                url: s.url,
-                domain: s.domain,
-                publishedAt: s.publishedAt,
-                snippet: s.snippet,
-              })),
-            },
-          },
-          include: {
-            sources: true,
-          },
-        });
-
-        createdStories.push(saved);
+        const res = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: true });
+        if (res.story) {
+          createdStories.push(res.story);
+        }
       } catch (angleErr) {
         console.warn(`[Radar Research] Angle "${angleQuery}" failed:`, (angleErr as Error).message);
       }
@@ -392,13 +461,26 @@ router.post('/radar/research', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/stories/refresh-category - Trigger category news refresh via OmniRoute
+// POST /api/stories/refresh-category - Trigger category news refresh via OmniRoute (with AI anti-duplication)
 router.post('/stories/refresh-category', async (req: Request, res: Response) => {
   try {
     const { category = 'technology', customTopic, lang = 'pt' } = req.body;
     const catKey = String(category).toLowerCase();
-    const queryObj = CATEGORY_QUERIES[catKey] || CATEGORY_QUERIES.popular;
     const targetLang = lang === 'en' ? 'en' : 'pt';
+
+    // Special handler for 24h Breaking News session
+    if (catKey === 'last_24h') {
+      const generated = await synthesize24hBreakingStory({
+        lang: targetLang,
+        customTopic: customTopic ? String(customTopic) : undefined,
+      });
+
+      const resUnique = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: true });
+      res.status(201).json({ story: resUnique.story });
+      return;
+    }
+
+    const queryObj = CATEGORY_QUERIES[catKey] || CATEGORY_QUERIES.popular;
     const searchTopic = customTopic
       ? String(customTopic)
       : targetLang === 'pt'
@@ -412,44 +494,36 @@ router.post('/stories/refresh-category', async (req: Request, res: Response) => 
       isRadar: false,
     });
 
-    const saved = await prisma.story.create({
-      data: {
-        slug: generated.slug,
-        category: generated.category,
-        topicTagPt: generated.topicTagPt,
-        topicTagEn: generated.topicTagEn,
-        titlePt: generated.titlePt,
-        titleEn: generated.titleEn,
-        summaryPt: generated.summaryPt,
-        summaryEn: generated.summaryEn,
-        bulletPointsPt: generated.bulletPointsPt,
-        bulletPointsEn: generated.bulletPointsEn,
-        perspectivesPt: generated.perspectivesPt,
-        perspectivesEn: generated.perspectivesEn,
-        fullArticlePt: generated.fullArticlePt,
-        fullArticleEn: generated.fullArticleEn,
-        imageUrl: generated.imageUrl,
-        dominantColor: generated.dominantColor,
-        secondaryColor: generated.secondaryColor,
-        articleCount: generated.articleCount,
-        isRadarGenerated: false,
-        sources: {
-          create: generated.sources.map((s) => ({
-            name: s.name,
-            title: s.title,
-            url: s.url,
-            domain: s.domain,
-            publishedAt: s.publishedAt,
-            snippet: s.snippet,
-          })),
-        },
-      },
-      include: {
-        sources: true,
-      },
+    const resUnique = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: true });
+    res.status(201).json({ story: resUnique.story });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// POST /api/stories/refresh-24h - Explicit endpoint to synthesize breaking news strictly for the last 24h (with anti-duplication)
+router.post('/stories/refresh-24h', async (req: Request, res: Response) => {
+  try {
+    const { customTopic, lang = 'pt' } = req.body;
+    const targetLang = lang === 'en' ? 'en' : 'pt';
+
+    const generated = await synthesize24hBreakingStory({
+      lang: targetLang,
+      customTopic: customTopic ? String(customTopic) : undefined,
     });
 
-    res.status(201).json({ story: saved });
+    const resUnique = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: true });
+    res.status(201).json({ story: resUnique.story });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// POST /api/stories/deduplicate - Scans and removes any existing duplicate stories from the database
+router.post('/stories/deduplicate', async (_req: Request, res: Response) => {
+  try {
+    const result = await cleanExistingDuplicateStories();
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

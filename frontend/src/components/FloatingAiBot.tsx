@@ -248,14 +248,14 @@ export function FloatingAiBot({
         ]
     : lang === 'pt'
     ? [
+        'O que aconteceu de mais importante nas últimas 24 horas?',
         'Quais são os assuntos mais comentados hoje?',
         'Me explique os últimos avanços em IA',
-        'O que está acontecendo na economia global?',
       ]
     : [
+        'What were the most critical events in the last 24 hours?',
         'What are the top trending topics today?',
         'Explain the latest breakthroughs in AI',
-        'What is happening in the global economy?',
       ];
 
   return (

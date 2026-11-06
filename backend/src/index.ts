@@ -11,6 +11,8 @@ import {
   getSystemConfig,
   purgeExpiredStories,
   runHourlyEditorialCycle,
+  cleanExistingDuplicateStories,
+  reclassifyAllExistingStories,
 } from './services/omnirouteService';
 
 const app = express();
@@ -44,15 +46,19 @@ cron.schedule('*/30 * * * *', async () => {
 
 async function bootstrap() {
   try {
-    await getSystemConfig();
-    await purgeExpiredStories(7);
-    await ensureSeededStories();
+    // 1. Start HTTP server immediately to pass platform health checks and accept incoming traffic
     app.listen(PORT, () => {
       console.log(`🚀 reach.news Backend API running on http://localhost:${PORT}`);
     });
+
+    // 2. Perform background startup tasks (config, seed, duplicates check) asynchronously
+    await getSystemConfig();
+    await purgeExpiredStories(7);
+    await ensureSeededStories();
+    await cleanExistingDuplicateStories();
+    await reclassifyAllExistingStories();
   } catch (err) {
-    console.error('Failed to bootstrap reach.news backend:', err);
-    process.exit(1);
+    console.error('Failed to initialize background bootstrap tasks:', err);
   }
 }
 

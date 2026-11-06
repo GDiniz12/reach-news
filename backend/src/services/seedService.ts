@@ -569,13 +569,33 @@ As the first production units prepare to ship in December, industry observers wi
     },
   ];
 
-  for (const item of initialStories) {
+  function parseRelativeOrIso(val?: string, baseTime?: Date): string {
+    const base = baseTime || new Date();
+    if (!val) return base.toISOString();
+    const match = val.match(/^(\d+)h\s*ago$/i);
+    if (match) {
+      const hours = parseInt(match[1], 10);
+      return new Date(base.getTime() - hours * 60 * 60 * 1000).toISOString();
+    }
+    const d = new Date(val);
+    return !isNaN(d.getTime()) ? d.toISOString() : base.toISOString();
+  }
+
+  for (let idx = 0; idx < initialStories.length; idx++) {
+    const item = initialStories[idx];
     const { sources, ...storyData } = item;
+    // Stagger publication time slightly within the last couple of hours for realistic exact times
+    const storyDate = new Date(Date.now() - (idx + 1) * 45 * 60 * 1000);
+
     await prisma.story.create({
       data: {
         ...storyData,
+        publishedAt: storyDate,
         sources: {
-          create: sources,
+          create: sources.map((s) => ({
+            ...s,
+            publishedAt: parseRelativeOrIso(s.publishedAt, storyDate),
+          })),
         },
       },
     });

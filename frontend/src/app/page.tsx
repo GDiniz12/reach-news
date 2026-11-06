@@ -1,16 +1,17 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   CATEGORIES,
+  CATEGORY_SUBTHEMES,
+  SubTheme,
   Language,
-  OmniRouteStatus,
   Story,
   UI_TEXT,
   UserProfile,
 } from '@/lib/types';
 import { DiscoverHeroStory, StoryCard } from '@/components/StoryCard';
-import { AuthModal, InterestsModal, OmniRouteModal } from '@/components/Modals';
+import { AuthModal, InterestsModal } from '@/components/Modals';
 import { FloatingAiBot } from '@/components/FloatingAiBot';
 import { BrandLogo } from '@/components/BrandLogo';
 import { getLocalAffinityMap, recordUserSignal } from '@/lib/telemetry';
@@ -18,14 +19,13 @@ import {
   Compass,
   Sparkles,
   RefreshCw,
-  Globe,
-  Cpu,
   LogOut,
   Heart,
   Search,
   Loader2,
   ArrowRight,
   SlidersHorizontal,
+  Clock,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -35,8 +35,11 @@ export default function ReachNewsHomePage() {
   const router = useRouter();
   const [lang, setLang] = useState<Language>('pt');
   const [selectedCategory, setSelectedCategory] = useState<string>('popular');
+  const [selectedSubtheme, setSelectedSubtheme] = useState<string | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
   const [loadingStories, setLoadingStories] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<boolean>(false);
+  const activeCategoryRef = useRef<string>('popular');
   const [showInterestsModal, setShowInterestsModal] = useState<boolean>(false);
 
   // Radar Search state
@@ -48,19 +51,12 @@ export default function ReachNewsHomePage() {
     count: number;
   } | null>(null);
 
-  // Category on-demand synthesis state
-  const [synthesizingCat, setSynthesizingCat] = useState<boolean>(false);
-
   // Auth & Profile state
   const [user, setUser] = useState<UserProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [savedStoryIds, setSavedStoryIds] = useState<Set<string>>(new Set());
   const [viewingSavedOnly, setViewingSavedOnly] = useState<boolean>(false);
-
-  // OmniRoute Status & Settings modal
-  const [omniStatus, setOmniStatus] = useState<OmniRouteStatus | null>(null);
-  const [showOmniModal, setShowOmniModal] = useState<boolean>(false);
 
   const t = UI_TEXT[lang];
 
@@ -69,8 +65,50 @@ export default function ReachNewsHomePage() {
     localStorage.setItem('reach_news_lang', newLang);
   };
 
+  const fetchWithRetry = async (
+    url: string,
+    options?: RequestInit,
+    maxRetries = 2,
+    baseDelayMs = 1200
+  ): Promise<any> => {
+    let lastError: any = null;
+    let delay = baseDelayMs;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        if (res.ok) {
+          return await res.json();
+        }
+        // If server returns 500, 502, 503, 504 (typical in production cold start), retry after pause
+        if (res.status >= 500 && attempt < maxRetries) {
+          console.warn(
+            `[ReachNews] Server HTTP ${res.status} on attempt ${attempt + 1}. Retrying in ${delay}ms...`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          delay *= 1.5;
+          continue;
+        }
+        return await res.json().catch(() => ({}));
+      } catch (err) {
+        lastError = err;
+        if (attempt < maxRetries) {
+          console.warn(
+            `[ReachNews] Network error on attempt ${attempt + 1}. Retrying in ${delay}ms...`,
+            err
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          delay *= 1.5;
+          continue;
+        }
+      }
+    }
+    throw lastError || new Error('Falha na comunicação com o servidor');
+  };
+
   const fetchStories = async (category: string) => {
+    activeCategoryRef.current = category;
     setLoadingStories(true);
+    setLoadError(false);
     try {
       if (category === 'for_you') {
         const activeToken =
@@ -79,36 +117,43 @@ export default function ReachNewsHomePage() {
         const url = `${API_BASE_URL}/api/stories/for-you?lang=${lang}&limit=30&localAffinity=${encodeURIComponent(
           localAff
         )}`;
-        const res = await fetch(url, {
+        const data = await fetchWithRetry(url, {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {},
         });
-        const data = await res.json();
-        if (Array.isArray(data.stories)) {
+        if (activeCategoryRef.current === category && Array.isArray(data?.stories)) {
           setStories(data.stories);
         }
         return;
       }
 
+      if (category === 'last_24h') {
+        const url = `${API_BASE_URL}/api/stories?category=last_24h&timeframe=24h&lang=${lang}&limit=30`;
+        const data = await fetchWithRetry(url);
+        if (activeCategoryRef.current === category && Array.isArray(data?.stories)) {
+          // Extra safeguard: guarantee client-side that every story was published within the last 24h
+          const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+          const filtered = data.stories.filter(
+            (s: Story) => new Date(s.publishedAt).getTime() >= cutoff
+          );
+          setStories(filtered.length > 0 ? filtered : data.stories);
+        }
+        return;
+      }
+
       const url = `${API_BASE_URL}/api/stories?category=${encodeURIComponent(category)}&limit=30`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (Array.isArray(data.stories)) {
+      const data = await fetchWithRetry(url);
+      if (activeCategoryRef.current === category && Array.isArray(data?.stories)) {
         setStories(data.stories);
       }
     } catch (err) {
       console.error('Error loading stories:', err);
+      if (activeCategoryRef.current === category) {
+        setLoadError(true);
+      }
     } finally {
-      setLoadingStories(false);
-    }
-  };
-
-  const fetchOmniStatus = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/omniroute/status`);
-      const data = await res.json();
-      setOmniStatus(data);
-    } catch {
-      // ignore
+      if (activeCategoryRef.current === category) {
+        setLoadingStories(false);
+      }
     }
   };
 
@@ -122,7 +167,6 @@ export default function ReachNewsHomePage() {
       setLang(savedLang);
     }
 
-    fetchOmniStatus();
     const savedToken = localStorage.getItem('reach_news_token');
     if (savedToken) {
       setToken(savedToken);
@@ -175,10 +219,7 @@ export default function ReachNewsHomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: q,
-          category:
-            selectedCategory === 'popular' || selectedCategory === 'for_you'
-              ? 'technology'
-              : selectedCategory,
+          category: selectedCategory,
           lang,
         }),
       });
@@ -228,30 +269,7 @@ export default function ReachNewsHomePage() {
     fetchStories(selectedCategory);
   };
 
-  const handleSynthesizeCategory = async () => {
-    if (synthesizingCat) return;
-    setSynthesizingCat(true);
-    try {
-      const targetCat =
-        selectedCategory === 'for_you'
-          ? user?.interests?.[0] || 'artificial_intelligence'
-          : selectedCategory;
-      const res = await fetch(`${API_BASE_URL}/api/stories/refresh-category`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: targetCat, lang }),
-      });
-      const data = await res.json();
-      if (data.story) {
-        const freshStory: Story = { ...data.story, isJustGenerated: true };
-        setStories((prev) => [freshStory, ...prev]);
-      }
-    } catch (err) {
-      console.error('Category synthesis error:', err);
-    } finally {
-      setSynthesizingCat(false);
-    }
-  };
+
 
   const handleToggleSave = async (storyId: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -300,9 +318,64 @@ export default function ReachNewsHomePage() {
     setSelectedCategory('popular');
   };
 
-  const displayedStories = viewingSavedOnly
-    ? stories.filter((s) => savedStoryIds.has(s.id))
-    : stories;
+  // Available subthemes for the selected parent theme (predefined + dynamic unique tags from loaded stories)
+  const availableSubthemes = useMemo(() => {
+    const predefined = CATEGORY_SUBTHEMES[selectedCategory] || [];
+
+    // Dynamically surface real tags present in the loaded stories of this category
+    const dynamicTags: SubTheme[] = [];
+    const seen = new Set<string>();
+    predefined.forEach((p) => {
+      seen.add(p.labelPt.toLowerCase());
+      seen.add(p.labelEn.toLowerCase());
+      p.keywords.forEach((k) => seen.add(k.toLowerCase()));
+    });
+
+    for (const s of stories) {
+      const tagPt = (s.topicTagPt || '').trim();
+      const tagEn = (s.topicTagEn || s.topicTagPt || '').trim();
+      if (!tagPt || tagPt.length < 3 || tagPt.length > 35) continue;
+      const lower = tagPt.toLowerCase();
+
+      if (!seen.has(lower) && !lower.startsWith('radar:')) {
+        seen.add(lower);
+        dynamicTags.push({
+          id: `dyn_${lower.replace(/[^a-z0-9]/g, '_')}`,
+          labelPt: tagPt,
+          labelEn: tagEn,
+          keywords: [tagPt, tagEn],
+        });
+      }
+      if (dynamicTags.length >= 6) break;
+    }
+
+    return [...predefined, ...dynamicTags];
+  }, [selectedCategory, stories]);
+
+  // Apply viewingSavedOnly AND selectedSubtheme filter
+  const displayedStories = useMemo(() => {
+    let list = viewingSavedOnly
+      ? stories.filter((s) => savedStoryIds.has(s.id))
+      : stories;
+
+    if (!selectedSubtheme) return list;
+
+    const matchedSub = availableSubthemes.find((s) => s.id === selectedSubtheme);
+    const keywords = matchedSub?.keywords && matchedSub.keywords.length > 0
+      ? matchedSub.keywords
+      : [selectedSubtheme];
+    const targetLabel = (matchedSub ? (lang === 'pt' ? matchedSub.labelPt : matchedSub.labelEn) : selectedSubtheme).toLowerCase();
+
+    return list.filter((story) => {
+      const tagPt = (story.topicTagPt || '').toLowerCase();
+      const tagEn = (story.topicTagEn || '').toLowerCase();
+      if (tagPt.includes(targetLabel) || targetLabel.includes(tagPt)) return true;
+      if (tagEn.includes(targetLabel) || targetLabel.includes(tagEn)) return true;
+
+      const fullText = `${story.titlePt} ${story.titleEn} ${story.summaryPt} ${story.summaryEn} ${story.topicTagPt} ${story.topicTagEn}`.toLowerCase();
+      return keywords.some((kw) => kw && fullText.includes(kw.toLowerCase()));
+    });
+  }, [stories, viewingSavedOnly, savedStoryIds, selectedSubtheme, availableSubthemes, lang]);
 
   const isBoxOnlyMode = Boolean(activeSearchTerm) || viewingSavedOnly;
   const heroStory = isBoxOnlyMode ? null : displayedStories[0] || null;
@@ -338,8 +411,8 @@ export default function ReachNewsHomePage() {
                   onChange={(e) => setRadarQuery(e.target.value)}
                   placeholder={
                     lang === 'pt'
-                      ? 'Pesquisar tópico no Radar IA (OmniRoute)...'
-                      : 'Research any topic with Radar AI (OmniRoute)...'
+                      ? 'Pesquisar tópicos, pessoas ou empresas no Radar AI...'
+                      : 'Research topics, figures or companies with Radar AI...'
                   }
                   className="w-full bg-[#202222] hover:bg-[#252727] focus:bg-[#202222] border border-white/[0.08] focus:border-[#53b8bb]/60 rounded-full pl-10 pr-24 py-1.5 text-[13px] text-[#ececec] placeholder-[#8e9293] focus:outline-none transition"
                 />
@@ -379,21 +452,6 @@ export default function ReachNewsHomePage() {
                   </span>
                 </button>
               )}
-
-              {/* OmniRoute Gateway Pill */}
-              <button
-                onClick={() => setShowOmniModal(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#202222] hover:bg-[#262828] border border-white/[0.07] text-xs font-medium text-[#b4b8b9] transition"
-                title="Configurar Gateway OmniRoute"
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    omniStatus?.online ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                />
-                <Cpu className="w-3.5 h-3.5 text-[#53b8bb]" />
-                <span className="hidden lg:inline">OmniRoute</span>
-              </button>
 
               {/* Bilingual Selector (PT-BR / EN-US) */}
               <div className="flex items-center rounded-full bg-[#202222] border border-white/[0.07] p-0.5 text-[11px] font-semibold">
@@ -501,6 +559,7 @@ export default function ReachNewsHomePage() {
                     setViewingSavedOnly(false);
                     setActiveSearchTerm(null);
                     setRadarGeneratedInfo(null);
+                    setSelectedSubtheme(null);
                     setSelectedCategory('for_you');
                   }}
                   className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition shrink-0 flex items-center gap-1.5 ${
@@ -514,11 +573,12 @@ export default function ReachNewsHomePage() {
                 </button>
               )}
 
-              {/* The original 9 platform categories */}
+              {/* The original 9 platform categories + dedicated 24h breaking session */}
               {CATEGORIES.map((cat) => {
                 const isSelected =
                   selectedCategory === cat.id && !viewingSavedOnly && !activeSearchTerm;
                 const label = lang === 'pt' ? cat.labelPt : cat.labelEn;
+                const is24h = cat.id === 'last_24h';
                 return (
                   <button
                     key={cat.id}
@@ -526,35 +586,69 @@ export default function ReachNewsHomePage() {
                       setViewingSavedOnly(false);
                       setActiveSearchTerm(null);
                       setRadarGeneratedInfo(null);
+                      setSelectedSubtheme(null);
                       setSelectedCategory(cat.id);
                     }}
-                    className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition shrink-0 ${
+                    className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition shrink-0 flex items-center gap-1.5 ${
                       isSelected
                         ? 'bg-[#282b2b] text-[#53b8bb] border border-[#53b8bb]/30'
+                        : is24h
+                        ? 'text-[#dcdede] hover:text-[#53b8bb] hover:bg-white/[0.04]'
                         : 'text-[#8e9293] hover:text-[#ececec] hover:bg-white/[0.03]'
                     }`}
                   >
-                    {label}
+                    {is24h && <Clock className="w-3.5 h-3.5 text-[#53b8bb]" />}
+                    <span>{label}</span>
+                    {is24h && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
                   </button>
                 );
               })}
             </div>
-
-            <button
-              onClick={handleSynthesizeCategory}
-              disabled={synthesizingCat}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#202222] hover:bg-[#282b2b] border border-white/[0.07] text-xs font-medium text-[#b4b8b9] hover:text-white transition shrink-0 disabled:opacity-50"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 text-[#53b8bb] ${
-                  synthesizingCat ? 'animate-spin' : ''
-                }`}
-              />
-              <span className="hidden sm:inline">
-                {synthesizingCat ? t.synthesizingCategory : t.synthesizeNewCategoryStory}
-              </span>
-            </button>
           </div>
+
+          {/* Subthemes row for the selected parent theme */}
+          {!viewingSavedOnly && !activeSearchTerm && availableSubthemes.length > 0 && (
+            <div className="border-t border-white/[0.04] bg-[#141515]/90 backdrop-blur-md">
+              <div className="max-w-[1160px] mx-auto px-4 sm:px-8 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                <span className="text-[11px] font-semibold text-[#6d7172] uppercase tracking-wider mr-1 hidden sm:inline-block shrink-0 select-none">
+                  {lang === 'pt' ? 'Subtemas:' : 'Subtopics:'}
+                </span>
+
+                {/* 'Todos' / 'All' pill */}
+                <button
+                  onClick={() => setSelectedSubtheme(null)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition shrink-0 flex items-center gap-1.5 ${
+                    selectedSubtheme === null
+                      ? 'bg-[#53b8bb]/20 text-[#53b8bb] border border-[#53b8bb]/50 shadow-sm font-semibold'
+                      : 'text-[#8e9293] hover:text-[#ececec] hover:bg-white/[0.03] border border-white/[0.04]'
+                  }`}
+                >
+                  <span>{lang === 'pt' ? 'Todos' : 'All'}</span>
+                  <span className="text-[10px] opacity-60">({stories.length})</span>
+                </button>
+
+                {availableSubthemes.map((sub) => {
+                  const isSubActive = selectedSubtheme === sub.id;
+                  const label = lang === 'pt' ? sub.labelPt : sub.labelEn;
+                  return (
+                    <button
+                      key={sub.id}
+                      onClick={() => setSelectedSubtheme(isSubActive ? null : sub.id)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition shrink-0 flex items-center gap-1.5 ${
+                        isSubActive
+                          ? 'bg-[#53b8bb]/20 text-[#53b8bb] border border-[#53b8bb]/50 shadow-sm font-semibold'
+                          : 'text-[#8e9293] hover:text-[#ececec] hover:bg-white/[0.03] border border-white/[0.04]'
+                      }`}
+                    >
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </header>
 
         {/* ================= MAIN DISCOVER EDITORIAL FEED ================= */}
@@ -580,6 +674,31 @@ export default function ReachNewsHomePage() {
                   {lang === 'pt' ? 'Ajustar Algoritmo' : 'Tune Algorithm'}
                 </span>
               </button>
+            </div>
+          )}
+
+          {/* DEDICATED BANNER FOR 24-HOUR BREAKING SESSION */}
+          {selectedCategory === 'last_24h' && !viewingSavedOnly && !activeSearchTerm && (
+            <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-[#202222] via-[#242828] to-[#202222] border border-[#53b8bb]/35 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg shadow-black/20">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-[#53b8bb]/15 border border-[#53b8bb]/35 flex items-center justify-center text-[#53b8bb] shrink-0">
+                  <Clock className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base sm:text-lg font-semibold text-white tracking-tight">
+                      {t.last24hTitle}
+                    </h2>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>{lang === 'pt' ? 'Plantão Ao Vivo' : 'Live Desk'}</span>
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-[13px] text-[#a4a9aa] mt-1 max-w-2xl leading-relaxed">
+                    {t.last24hDesc}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
           {activeSearchTerm && (
@@ -642,25 +761,70 @@ export default function ReachNewsHomePage() {
                 ))}
               </div>
             </div>
+          ) : loadError ? (
+            <div className="rounded-2xl bg-[#202222] border border-white/[0.06] p-12 text-center my-8">
+              <p className="font-editorial text-[#b4b8b9] text-xl mb-3">
+                {lang === 'pt'
+                  ? 'Não foi possível carregar as notícias no momento.'
+                  : 'Unable to load stories at this moment.'}
+              </p>
+              <p className="text-xs text-[#8e9293] mb-6 max-w-md mx-auto leading-relaxed">
+                {lang === 'pt'
+                  ? 'O servidor pode estar inicializando (cold start) ou houve uma oscilação temporária de rede.'
+                  : 'The backend server may be waking up (cold start) or there was a temporary network fluctuation.'}
+              </p>
+              <button
+                onClick={() => fetchStories(selectedCategory)}
+                className="px-5 py-2.5 rounded-full bg-[#53b8bb] text-[#111313] font-semibold text-xs inline-flex items-center gap-2 transition hover:bg-[#66c7ca]"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>{lang === 'pt' ? 'Tentar Novamente' : 'Try Again'}</span>
+              </button>
+            </div>
           ) : displayedStories.length === 0 ? (
             <div className="rounded-2xl bg-[#202222] border border-white/[0.06] p-12 text-center my-8">
-              <p className="font-editorial text-[#b4b8b9] text-xl mb-4">
+              <p className="font-editorial text-[#b4b8b9] text-xl mb-3">
                 {viewingSavedOnly
                   ? lang === 'pt'
                     ? 'Você ainda não salvou nenhuma notícia.'
                     : 'You have not saved any stories yet.'
+                  : selectedSubtheme
+                  ? lang === 'pt'
+                    ? 'Nenhuma matéria encontrada para este subtema específico.'
+                    : 'No stories found for this specific subtopic.'
+                  : selectedCategory === 'last_24h'
+                  ? t.no24hStoriesTitle
                   : lang === 'pt'
                   ? 'Nenhuma notícia encontrada nesta categoria ainda.'
                   : 'No stories found in this category yet.'}
               </p>
-              {!viewingSavedOnly && (
+              {selectedSubtheme && (
+                <div className="mt-4">
+                  <button
+                    onClick={() => setSelectedSubtheme(null)}
+                    className="px-5 py-2.5 rounded-full bg-[#53b8bb] text-[#111313] font-semibold text-xs inline-flex items-center gap-2 transition hover:bg-[#66c7ca]"
+                  >
+                    <span>{lang === 'pt' ? 'Ver todas as matérias' : 'View all stories'}</span>
+                  </button>
+                </div>
+              )}
+              {selectedCategory === 'last_24h' && !viewingSavedOnly && !selectedSubtheme && (
+                <p className="text-xs text-[#8e9293] mb-5 max-w-md mx-auto leading-relaxed">
+                  {t.no24hStoriesDesc}
+                </p>
+              )}
+              {!viewingSavedOnly && !selectedSubtheme && (
                 <button
-                  onClick={handleSynthesizeCategory}
-                  disabled={synthesizingCat}
-                  className="px-5 py-2.5 rounded-full bg-[#53b8bb] text-[#111313] font-semibold text-xs inline-flex items-center gap-2"
+                  onClick={() => fetchStories(selectedCategory)}
+                  disabled={loadingStories}
+                  className="px-5 py-2.5 rounded-full bg-[#202222] hover:bg-[#282b2b] border border-white/[0.08] text-[#ececec] font-semibold text-xs inline-flex items-center gap-2 transition"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{t.synthesizeNewCategoryStory}</span>
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 text-[#53b8bb] ${
+                      loadingStories ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>{lang === 'pt' ? 'Atualizar Notícias' : 'Refresh News'}</span>
                 </button>
               )}
             </div>
@@ -700,17 +864,10 @@ export default function ReachNewsHomePage() {
         <div className="max-w-[1160px] mx-auto px-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
           <div className="flex items-center gap-2.5">
             <BrandLogo size="sm" />
-            <span>— Powered by OmniRoute AI</span>
+            <span>— reach.news</span>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-5">
-            <button
-              onClick={() => setShowOmniModal(true)}
-              className="hover:text-[#ececec] transition font-mono flex items-center gap-1.5"
-            >
-              <Globe className="w-3.5 h-3.5 text-[#53b8bb]" />
-              <span>{omniStatus?.baseUrl || 'http://localhost:20128/v1'}</span>
-            </button>
             <span className="hover:text-[#ececec] cursor-pointer transition">{t.footerTerms}</span>
             <span className="hover:text-[#ececec] cursor-pointer transition">{t.footerPrivacy}</span>
           </div>
@@ -730,16 +887,6 @@ export default function ReachNewsHomePage() {
             setToken(newToken);
             setUser(newUser);
           }}
-        />
-      )}
-
-      {showOmniModal && (
-        <OmniRouteModal
-          status={omniStatus}
-          lang={lang}
-          apiBaseUrl={API_BASE_URL}
-          onClose={() => setShowOmniModal(false)}
-          onUpdated={(s) => setOmniStatus(s)}
         />
       )}
 

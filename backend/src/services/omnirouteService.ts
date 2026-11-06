@@ -6,9 +6,21 @@ import {
   resolveTopicImage,
   fetchTrendingTopics,
   fetchDistinctCategoryTopics,
+  fetch24hBreakingTopics,
   CATEGORY_QUERIES,
   RawNewsItem,
 } from './searchTools';
+import {
+  analyzeCandidateForDuplicates,
+  cleanExistingDuplicateStories,
+} from './deduplicationService';
+import {
+  classifyStoryCategory,
+  cleanAndStandardizeTopicTag,
+  reclassifyAllExistingStories,
+} from './categoryClassifier';
+
+export { cleanExistingDuplicateStories, reclassifyAllExistingStories };
 
 export interface GeneratedStoryPayload {
   slug: string;
@@ -29,6 +41,7 @@ export interface GeneratedStoryPayload {
   dominantColor: string;
   secondaryColor: string;
   articleCount: number;
+  publishedAt?: string | Date;
   isRadarGenerated: boolean;
   radarQuery?: string;
   sources: Array<{
@@ -59,7 +72,7 @@ export async function getSystemConfig() {
         id: 'default',
         omnirouteBaseUrl: process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128/v1',
         omnirouteApiKey: process.env.OMNIROUTE_API_KEY || 'sk-omniroute-local',
-        omnirouteModel: process.env.OMNIROUTE_MODEL || 'antigravity/gemini-3.8-flash-high',
+        omnirouteModel: process.env.OMNIROUTE_MODEL || 'antigravity/gemini-3.8-flash-low',
         cronIntervalMin: 30,
       },
     });
@@ -75,7 +88,7 @@ export async function getSystemConfig() {
     config = await prisma.systemConfig.update({
       where: { id: 'default' },
       data: {
-        omnirouteModel: 'antigravity/gemini-3.8-flash-high',
+        omnirouteModel: 'antigravity/gemini-3.8-flash-low',
         cronIntervalMin: 30,
       },
     });
@@ -172,13 +185,13 @@ async function callOmniRouteCompletion(
     preferredModel === 'auto/smart' ||
     preferredModel === 'antigravity/gemini-3.1-flash-lite' ||
     preferredModel === 'antigravity/gemini-2.5-flash'
-      ? 'antigravity/gemini-3.8-flash-high'
+      ? 'antigravity/gemini-3.8-flash-low'
       : preferredModel;
 
   const candidateModels = Array.from(
     new Set([
       normalizedPreferred,
-      'antigravity/gemini-3.8-flash-high',
+      'antigravity/gemini-3.8-flash-low',
       'antigravity/claude-sonnet-5-5-medium',
       'antigravity/claude-opus-5-5-medium',
       'antigravity/gemini-3.8-flash-medium',
@@ -223,8 +236,25 @@ async function writeMasterpieceArticle(params: {
   lang: 'pt' | 'en';
   sourcesContext: string;
   deepExcerpts: string;
+  is24h?: boolean;
 }): Promise<string> {
-  const { client, preferredModel, query, headline, summary, lang, sourcesContext, deepExcerpts } = params;
+  const { client, preferredModel, query, headline, summary, lang, sourcesContext, deepExcerpts, is24h = false } = params;
+
+  const temporalPromptPt = is24h
+    ? `\n\nDIRETRIZ MANDATÓRIA DE FOCO TEMPORAL (ÚLTIMAS 24 HORAS):
+Esta reportagem pertence à sessão exclusiva "ÚLTIMAS 24 HORAS" do reach.news.
+A IA DEVE FOCAR ESTRITAMENTE em acontecimentos, anúncios, declarações, números e decisões ocorridos rigorosamente no período das últimas 24 horas.
+- É PROIBIDO tratar contexto antigo ou histórico como se fosse o acontecimento de hoje.
+- O primeiro parágrafo (Lead) DEVE ancorar com extrema clareza e autoridade o que aconteceu hoje ou nas últimas horas, quem esteve envolvido e quais os desdobramentos imediatos em tempo real.`
+    : '';
+
+  const temporalPromptEn = is24h
+    ? `\n\nMANDATORY TEMPORAL FOCUS DIRECTIVE (LAST 24 HOURS):
+This article leads the dedicated "LAST 24 HOURS" session of reach.news.
+The AI MUST FOCUS STRICTLY on events, announcements, statements, figures, and decisions that occurred strictly within the last 24 hours.
+- NEVER treat historical background or past events as today's breaking news.
+- The opening lead paragraph MUST anchor with precision what happened today or in recent hours, who is involved, and the immediate real-time fallout.`
+    : '';
 
   const systemPromptPt = `Você é um jornalista sênior premiado e redator-chefe (com passagem por redações como The New York Times, Valor Econômico, piauí, Nexo Jornal e BBC Brasil).
 Sua missão é escrever o corpo completo de uma GRANDE REPORTAGEM JORNALÍSTICA sobre o tema fornecido, utilizando rigorosamente os fatos, nomes, datas, números, valores e declarações presentes nas fontes coletadas.
@@ -235,7 +265,7 @@ DIRETRIZES ESTILÍSTICAS OBRIGATÓRIAS (ESTILO PERPLEXITY DISCOVER / GRANDE IMPR
 3. SUBTÍTULOS EDITORIAIS (##): Divida a reportagem em 3 ou 4 seções usando subtítulos instigantes em Markdown (\`## Subtítulo\`). Os subtítulos devem ser informativos e elegantes, como em uma grande reportagem.
 4. CITAÇÕES E BASTIDORES: Inclua pelo menos uma citação em destaque (\`> "Citação..."\`) ou declaração relevante extraída do contexto, atribuindo claramente a quem falou ou ao veículo que revelou a informação (ex: "segundo apurou o Valor Econômico", "de acordo com a decisão judicial", "em entrevista coletiva").
 5. FLUIDEZ DE PROSA: Escreva em prosa jornalística corrida, elegante e analítica. Não use listas de bullet points no meio do artigo. Conecte os parágrafos com transições naturais, explicando o histórico do caso, os interesses em jogo, os argumentos de cada lado e o que acontece a partir de agora.
-6. IDIOMA: Escreva 100% em Português do Brasil (PT-BR) impecável. Não inclua o título principal (#) no início pois ele já está no topo da página. Comece direto no primeiro parágrafo (Lead).`;
+6. IDIOMA: Escreva 100% em Português do Brasil (PT-BR) impecável. Não inclua o título principal (#) no início pois ele já está no topo da página. Comece direto no primeiro parágrafo (Lead).${temporalPromptPt}`;
 
   const systemPromptEn = `You are an award-winning senior investigative journalist and feature writer (with experience at The New York Times, Financial Times, Reuters, and Perplexity Discover).
 Your mission is to write a comprehensive, deeply reported LONG-FORM JOURNALISTIC ARTICLE based strictly on the facts, names, dates, figures, and statements found in the gathered sources.
@@ -245,7 +275,7 @@ MANDATORY EDITORIAL GUIDELINES:
 2. DEPTH & LENGTH: Write a rich, substantial 700–1,000 word article across 7 to 10 well-crafted paragraphs.
 3. EDITORIAL SUBHEADINGS (##): Structure the narrative after the opening lead paragraphs using 3 to 4 compelling Markdown subheadings (\`## Subheading\`).
 4. ATTRIBUTION & QUOTES: Weave natural journalistic attribution throughout the prose ("according to court filings", "as reported by...") and include at least one impactful blockquote (\`> "..."\`).
-5. PURE NARRATIVE PROSE: Write in flowing editorial paragraphs—do not use bullet lists inside the article body. Do not repeat the main headline (#) at the top; start immediately with the opening lead paragraph.`;
+5. PURE NARRATIVE PROSE: Write in flowing editorial paragraphs—do not use bullet lists inside the article body. Do not repeat the main headline (#) at the top; start immediately with the opening lead paragraph.${temporalPromptEn}`;
 
   const userPrompt = `MANCHETE DA MATÉRIA: ${headline}
 SUBTÍTULO / SÍNTESE: ${summary}
@@ -280,13 +310,15 @@ export async function researchAndSynthesizeStory(params: {
   category: string;
   lang?: 'pt' | 'en';
   isRadar?: boolean;
+  timeframe?: '24h' | 'all';
 }): Promise<GeneratedStoryPayload> {
-  const { query, category, lang = 'pt', isRadar = false } = params;
+  const { query, category, lang = 'pt', isRadar = false, timeframe = 'all' } = params;
+  const is24h = timeframe === '24h' || category === 'last_24h';
   const { client, config } = await createOmniRouteClient();
 
-  // 1. Gather live news prioritizing the user's selected language + international sources
-  const primaryItems = await searchWebNews(query, lang, 12);
-  const secondaryItems = await searchWebNews(query, lang === 'pt' ? 'en' : 'pt', 6);
+  // 1. Gather live news prioritizing the user's selected language + international sources with 24h filter if requested
+  const primaryItems = await searchWebNews(query, lang, 12, is24h ? '24h' : 'all');
+  const secondaryItems = await searchWebNews(query, lang === 'pt' ? 'en' : 'pt', 6, is24h ? '24h' : 'all');
   const collectedItems: RawNewsItem[] = [...primaryItems, ...secondaryItems];
 
   // 2. Scrape full paragraphs from the top 4 real articles so the journalist AI has rich factual material
@@ -318,7 +350,27 @@ export async function researchAndSynthesizeStory(params: {
 
   const excerptsText = deepExcerpts.join('\n\n====================\n\n');
 
+  // Load recent story headlines from PostgreSQL to instruct the AI not to duplicate existing coverage
+  const recentCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  const recentStories = await prisma.story.findMany({
+    where: { publishedAt: { gte: recentCutoff } },
+    select: { titlePt: true },
+    take: 20,
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  const recentHeadlinesPrompt =
+    recentStories.length > 0
+      ? `\n\nMANCHETES RECENTES JÁ PUBLICADAS NO PORTAL (É EXPRESSAMENTE PROIBIDO REPETIR OU GERAR MATÉRIA PRATICAMENTE IGUAL A QUALQUER UMA DESSAS):\n${recentStories
+          .map((s, idx) => `${idx + 1}. ${s.titlePt}`)
+          .join('\n')}\n\nDIRETRIZ DE INEDITISMO MANDATÓRIO: Se as fontes em tempo real coletadas tratarem do mesmo evento ou anúncio já noticiado acima, você DEVE buscar um fato inédito, novo desdobramento ou escolher outro acontecimento dentre as fontes coletadas para que a matéria seja 100% original e não duplicada.`
+      : '';
+
   try {
+    const temporalInstructionStage1 = is24h
+      ? `\n- DIRETRIZ MANDATÓRIA (ÚLTIMAS 24 HORAS): Esta notícia pertence à sessão especial de ÚLTIMAS 24 HORAS do reach.news. A IA DEVE FOCAR ESTRITAMENTE em notícias, fatos e desdobramentos ocorridos nas últimas 24 horas. É PROIBIDO tratar fatos antigos como se fossem novidade de hoje. A manchete e o resumo DEVEM destacar o fato mais recente das últimas 24 horas.`
+      : '';
+
     // STAGE 1: Structured Metadata, Headlines, Standfirst Summary, Takeaways & 360° Perspectives
     const stage1Messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
@@ -329,7 +381,16 @@ REGRAS:
 - Todos os campos terminados em "Pt" DEVEM estar 100% em Português do Brasil (PT-BR).
 - Todos os campos terminados em "En" DEVEM estar 100% em Inglês (EN-US).
 - A manchete ("titlePt" / "titleEn") deve ser jornalística, direta, informativa e natural (ex: "Justiça brasileira proíbe Meta de treinar IA com conteúdo jornalístico" / "Brazil court bars Meta from training AI on news content").
-- O resumo ("summaryPt" / "summaryEn") deve ter 2 frases densas e factuais trazendo os números, nomes e consequências principais.`,
+- O resumo ("summaryPt" / "summaryEn") deve ter 2 frases densas e factuais trazendo os números, nomes e consequências principais.
+- REGRA DE INEDITISMO: Verifique as manchetes recentes do portal. É proibido gerar matérias idênticas ou redundantes sobre o mesmo evento já noticiado.${temporalInstructionStage1}
+- TAXONOMIA E CLASSIFICAÇÃO ESTRITA:
+  A categoria ("detectedCategory") DEVE ser estritamente uma de: sports | technology | science | politics | crime | entertainment | economics | videogames.
+  * POLÍTICA: Governos, chefes de estado, eleições, parlamentos, cúpulas diplomáticas (ex: Mercosul, G20, ONU), leis e STF. JAMAIS classifique política como esportes ou tecnologia.
+  * ESPORTES: Exclusivamente competições atléticas, partidas, clubes, atletas, torneios (Futebol, F1, NBA, UFC, etc.).
+  * ECONOMIA: Banco Central, taxa Selic, juros, inflação, bolsas de valores, finanças, dívida pública e empresas.
+  * VIDEOGAMES: Jogos eletrônicos, consoles (PlayStation, Xbox, Nintendo), estúdios e eSports.
+- TAG DO TÓPICO ("topicTagPt" / "topicTagEn"):
+  Deve ser uma tag jornalística concisa de 2 a 3 palavras elegantes (ex: "Fórmula 1", "Inteligência Artificial", "Eleições 2026", "Política Monetária", "Futebol Europeu"). NUNCA use prefixos como "Radar:" ou frases genéricas como "top breaking news".`,
       },
       {
         role: 'user',
@@ -339,7 +400,7 @@ Fontes em tempo real:
 ${sourcesContext}
 
 Trechos das reportagens:
-${excerptsText.slice(0, 4000)}
+${excerptsText.slice(0, 4000)}${recentHeadlinesPrompt}
 
 Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
 {
@@ -388,6 +449,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
       lang: 'pt',
       sourcesContext,
       deepExcerpts: excerptsText.slice(0, 6000),
+      is24h,
     });
 
     let fullArticleEn = '';
@@ -401,6 +463,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
         lang: 'en',
         sourcesContext,
         deepExcerpts: excerptsText.slice(0, 6000),
+        is24h,
       });
     } else {
       // Generate concise English version using fast active Antigravity Flash model
@@ -413,18 +476,55 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
         lang: 'en',
         sourcesContext,
         deepExcerpts: excerptsText.slice(0, 4000),
+        is24h,
       }).catch(() => fullArticlePt);
     }
 
     const palette = VIBRANT_PALETTES[Math.floor(Math.random() * VIBRANT_PALETTES.length)];
-    const finalCategory = parsed.detectedCategory || category;
+    
+    // Rigorously classify category to prevent political news in sports or tech
+    const classification = classifyStoryCategory({
+      title: parsed.titlePt || query,
+      summary: parsed.summaryPt || '',
+      content: excerptsText,
+      hintCategory: parsed.detectedCategory || category,
+    });
+    const finalCategory = classification.category;
+
+    const cleanTagPt = cleanAndStandardizeTopicTag({
+      rawTag: parsed.topicTagPt || query.slice(0, 28),
+      title: parsed.titlePt || query,
+      category: finalCategory,
+      lang: 'pt',
+    });
+
+    const cleanTagEn = cleanAndStandardizeTopicTag({
+      rawTag: parsed.topicTagEn || query.slice(0, 28),
+      title: parsed.titleEn || query,
+      category: finalCategory,
+      lang: 'en',
+    });
+
     const uniqueSources = deduplicateSources(collectedItems, query);
+
+    // Compute exact publication date from the latest collected source, or current timestamp
+    let latestPubDate: string = new Date().toISOString();
+    for (const s of uniqueSources) {
+      if (s.publishedAt) {
+        const d = new Date(s.publishedAt);
+        if (!isNaN(d.getTime()) && d.getTime() <= Date.now()) {
+          if (new Date(latestPubDate).getTime() < d.getTime()) {
+            latestPubDate = d.toISOString();
+          }
+        }
+      }
+    }
 
     return {
       slug: slugify(parsed.titlePt || parsed.titleEn || query),
       category: finalCategory,
-      topicTagPt: parsed.topicTagPt || query.slice(0, 28),
-      topicTagEn: parsed.topicTagEn || query.slice(0, 28),
+      topicTagPt: cleanTagPt,
+      topicTagEn: cleanTagEn,
       titlePt: parsed.titlePt,
       titleEn: parsed.titleEn,
       summaryPt: parsed.summaryPt,
@@ -439,6 +539,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
       dominantColor: palette.dominant,
       secondaryColor: palette.secondary,
       articleCount: Math.max(uniqueSources.length, 12),
+      publishedAt: latestPubDate,
       isRadarGenerated: isRadar,
       radarQuery: isRadar ? query : undefined,
       sources: uniqueSources,
@@ -596,6 +697,7 @@ function buildIntelligentSynthesisFromSources(
     dominantColor: palette.dominant,
     secondaryColor: palette.secondary,
     articleCount: Math.max(sources.length, 12),
+    publishedAt: new Date().toISOString(),
     isRadarGenerated: isRadar,
     radarQuery: isRadar ? query : undefined,
     sources,
@@ -621,10 +723,22 @@ export async function answerStoryQuestion(params: {
   try {
     const { client, config } = await createOmniRouteClient();
 
+    const isAskingAbout24h =
+      question.toLowerCase().includes('24h') ||
+      question.toLowerCase().includes('24 horas') ||
+      question.toLowerCase().includes('hoje') ||
+      question.toLowerCase().includes('últimas horas');
+
+    const focusDirective = isAskingAbout24h
+      ? lang === 'pt'
+        ? '\nATENÇÃO CRÍTICA: O usuário está consultando a sessão de ÚLTIMAS 24 HORAS ou perguntando sobre fatos de hoje. Concentre sua resposta estritamente nos acontecimentos, decisões e desdobramentos mais recentes ocorridos nas últimas 24 horas.'
+        : '\nCRITICAL ATTENTION: The user is asking about the LAST 24 HOURS breaking news session. Focus your response strictly on events, decisions, and developments that occurred in the last 24 hours.'
+      : '';
+
     const systemPrompt =
       lang === 'pt'
-        ? 'Você é o assistente de inteligência jornalística do reach.news (roteado via OmniRoute). Você pode responder tanto perguntas específicas sobre a reportagem que o leitor está lendo no momento quanto perguntas sobre QUALQUER outro assunto, notícia, história, ciência, tecnologia, política ou curiosidade geral. Responda sempre em Português (PT-BR) de forma clara, aprofundada, direta e elegante.'
-        : 'You are the reach.news AI journalistic intelligence assistant (routed via OmniRoute). You can answer both specific questions about the article the reader is currently viewing and questions about ANY other topic, news event, science, technology, politics, or general knowledge. Always answer in English clearly, insightfully, and concisely.';
+        ? `Você é o assistente de inteligência jornalística do reach.news (roteado via OmniRoute). Você pode responder tanto perguntas específicas sobre a reportagem que o leitor está lendo no momento quanto perguntas sobre QUALQUER outro assunto, notícia, história, ciência, tecnologia, política ou curiosidade geral. Responda sempre em Português (PT-BR) de forma clara, aprofundada, direta e elegante.${focusDirective}`
+        : `You are the reach.news AI journalistic intelligence assistant (routed via OmniRoute). You can answer both specific questions about the article the reader is currently viewing and questions about ANY other topic, news event, science, technology, politics, or general knowledge. Always answer in English clearly, insightfully, and concisely.${focusDirective}`;
 
     const userPrompt = story
       ? `CONTEXTO DA REPORTAGEM ATUAL NA TELA (use se a pergunta for sobre ela; se o usuário perguntar sobre outro assunto, responda livremente sobre o assunto perguntado):
@@ -638,7 +752,7 @@ Pergunta do Usuário: ${question}`
 
     const response = await callOmniRouteCompletion(
       client,
-      config.omnirouteModel || 'antigravity/gemini-3.8-flash-high',
+      config.omnirouteModel || 'antigravity/gemini-3.8-flash-low',
       [
         {
           role: 'system',
@@ -671,6 +785,44 @@ Pergunta do Usuário: ${question}`
 }
 
 /**
+ * Synthesizes a dedicated breaking story strictly focused on the last 24 hours.
+ * Discovers the top urgent breaking topic of the last 24h and passes timeframe: '24h' to OmniRoute.
+ */
+export async function synthesize24hBreakingStory(params: {
+  lang?: 'pt' | 'en';
+  customTopic?: string;
+}): Promise<GeneratedStoryPayload> {
+  const { lang = 'pt', customTopic } = params;
+  let topic = customTopic;
+
+  if (!topic) {
+    const recentCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    const recentStories = await prisma.story.findMany({
+      where: { publishedAt: { gte: recentCutoff } },
+      select: { titlePt: true },
+      take: 40,
+    });
+    const excludeHeadlines = recentStories.map((s) => s.titlePt);
+
+    const topics = await fetch24hBreakingTopics(5, lang, excludeHeadlines);
+    topic =
+      topics[0] ||
+      (lang === 'pt'
+        ? 'Principais fatos e desdobramentos das últimas 24 horas no Brasil e no mundo'
+        : 'Top breaking news and developments in the last 24 hours worldwide');
+  }
+
+  console.log(`[24h AI Engine] Synthesizing dedicated 24h story for: "${topic}"...`);
+  return researchAndSynthesizeStory({
+    query: topic,
+    category: 'last_24h',
+    lang,
+    isRadar: false,
+    timeframe: '24h',
+  });
+}
+
+/**
  * Purges stories published more than 7 days ago to keep the PostgreSQL database lean.
  * Related StorySource, SavedStory, and StoryChatMessage rows are automatically removed via onDelete: Cascade.
  */
@@ -692,28 +844,55 @@ export async function purgeExpiredStories(retentionDays = 7): Promise<number> {
 }
 
 /**
- * Helper to save a synthesized story into PostgreSQL, avoiding near-duplicate titles from the last 12 hours
+ * Helper to save a synthesized story into PostgreSQL after deep multi-layered deduplication analysis
+ * (Source URL matching + Token overlap + AI semantic analysis)
  */
-async function saveSynthesizedStoryIfUnique(generated: GeneratedStoryPayload) {
-  const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
-  const titlePrefix = generated.titlePt.slice(0, 28).trim();
+export async function saveSynthesizedStoryIfUnique(
+  generated: GeneratedStoryPayload,
+  options?: { allowReturnExisting?: boolean }
+): Promise<{ story: any; isDuplicate: boolean; reason?: string }> {
+  const { client, config } = await createOmniRouteClient();
+  const threeDaysAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
 
-  const existing = await prisma.story.findFirst({
-    where: {
-      publishedAt: { gte: twelveHoursAgo },
-      titlePt: { contains: titlePrefix, mode: 'insensitive' },
-    },
+  const recentStories = await prisma.story.findMany({
+    where: { publishedAt: { gte: threeDaysAgo } },
+    include: { sources: { select: { url: true } } },
+    take: 60,
+    orderBy: { publishedAt: 'desc' },
   });
 
-  if (existing) {
-    console.log(`[Hourly Cycle] Skipping duplicate story: "${generated.titlePt}"`);
-    return null;
+  const dupCheck = await analyzeCandidateForDuplicates({
+    candidateTitle: generated.titlePt,
+    candidateSummary: generated.summaryPt,
+    candidateSources: generated.sources,
+    existingStories: recentStories,
+    client,
+    model: config.omnirouteModel || 'antigravity/gemini-3.8-flash-low',
+  });
+
+  if (dupCheck.isDuplicate) {
+    console.log(
+      `[Deduplication System] REJECTED DUPLICATE: "${generated.titlePt}" duplicates "${dupCheck.duplicateOf?.titlePt}" (${dupCheck.reason})`
+    );
+    if (options?.allowReturnExisting && dupCheck.duplicateOf) {
+      const fullExisting = await prisma.story.findUnique({
+        where: { id: dupCheck.duplicateOf.id },
+        include: { sources: true },
+      });
+      return { story: fullExisting, isDuplicate: true, reason: dupCheck.reason };
+    }
+    return { story: null, isDuplicate: true, reason: dupCheck.reason };
   }
 
-  return prisma.story.create({
+  const storyPublishedAt = generated.publishedAt
+    ? new Date(generated.publishedAt)
+    : new Date();
+
+  const saved = await prisma.story.create({
     data: {
       slug: generated.slug,
       category: generated.category,
+      publishedAt: !isNaN(storyPublishedAt.getTime()) ? storyPublishedAt : new Date(),
       topicTagPt: generated.topicTagPt,
       topicTagEn: generated.topicTagEn,
       titlePt: generated.titlePt,
@@ -738,12 +917,21 @@ async function saveSynthesizedStoryIfUnique(generated: GeneratedStoryPayload) {
           title: s.title,
           url: s.url,
           domain: s.domain,
-          publishedAt: s.publishedAt,
+          publishedAt: s.publishedAt
+            ? (isNaN(new Date(s.publishedAt).getTime())
+                ? new Date().toISOString()
+                : new Date(s.publishedAt).toISOString())
+            : new Date().toISOString(),
           snippet: s.snippet,
         })),
       },
     },
+    include: {
+      sources: true,
+    },
   });
+
+  return { story: saved, isDuplicate: false };
 }
 
 let isHourlyCycleRunning = false;
@@ -773,10 +961,19 @@ export async function runHourlyEditorialCycle(): Promise<{
     console.log('[Hourly Cycle] 1/3 Purging stories older than 7 days...');
     deletedExpired = await purgeExpiredStories(7);
 
+    // Fetch recent headlines to exclude already covered topics
+    const recentCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    const recentStories = await prisma.story.findMany({
+      where: { publishedAt: { gte: recentCutoff } },
+      select: { titlePt: true },
+      take: 60,
+    });
+    const excludeHeadlines = recentStories.map((s) => s.titlePt);
+
     // Step 2: Top 5 most talked-about trending topics right now across Google Trends, X/Twitter, and major press
     console.log('[Hourly Cycle] 2/3 Fetching Top 5 viral/trending topics (Google Trends + X/Twitter + Top Media)...');
-    const topTrendingTopics = await fetchTrendingTopics(5);
-    console.log('[Hourly Cycle] Top 5 Trending Topics discovered:', topTrendingTopics);
+    const topTrendingTopics = await fetchTrendingTopics(5, excludeHeadlines);
+    console.log('[Hourly Cycle] Top 5 Trending Topics discovered (excluding existing):', topTrendingTopics);
 
     for (const topic of topTrendingTopics) {
       try {
@@ -787,8 +984,8 @@ export async function runHourlyEditorialCycle(): Promise<{
           lang: 'pt',
           isRadar: false,
         });
-        const saved = await saveSynthesizedStoryIfUnique(generated);
-        if (saved) trendingGenerated++;
+        const res = await saveSynthesizedStoryIfUnique(generated);
+        if (res.story && !res.isDuplicate) trendingGenerated++;
       } catch (err) {
         console.warn(`[Hourly Cycle - Trending] Error generating topic "${topic}":`, (err as Error).message);
       }
@@ -811,7 +1008,7 @@ export async function runHourlyEditorialCycle(): Promise<{
 
     for (const category of editorialCategories) {
       try {
-        const distinctTopics = await fetchDistinctCategoryTopics(category, 2, 'pt');
+        const distinctTopics = await fetchDistinctCategoryTopics(category, 2, 'pt', excludeHeadlines);
         for (const topicQuery of distinctTopics) {
           try {
             console.log(`[Hourly Cycle - ${category.toUpperCase()}] Synthesizing story for: "${topicQuery}"`);
@@ -821,10 +1018,19 @@ export async function runHourlyEditorialCycle(): Promise<{
               lang: 'pt',
               isRadar: false,
             });
-            // Keep the story assigned to this specific category so every tab has >=2 fresh stories
-            generated.category = category;
-            const saved = await saveSynthesizedStoryIfUnique(generated);
-            if (saved) categoryGenerated++;
+            // Safeguard: Do not force political news into sports or vice-versa
+            if (generated.category !== category) {
+              const verified = classifyStoryCategory({
+                title: generated.titlePt,
+                summary: generated.summaryPt,
+                hintCategory: category,
+              });
+              if (verified.category === category) {
+                generated.category = category;
+              }
+            }
+            const res = await saveSynthesizedStoryIfUnique(generated);
+            if (res.story && !res.isDuplicate) categoryGenerated++;
           } catch (innerErr) {
             console.warn(
               `[Hourly Cycle - ${category}] Error synthesizing "${topicQuery}":`,
@@ -896,7 +1102,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) no formato:
 
     const res = await callOmniRouteCompletion(
       client,
-      config.omnirouteModel || 'antigravity/gemini-3.8-flash-high',
+      config.omnirouteModel || 'antigravity/gemini-3.8-flash-low',
       [{ role: 'user', content: prompt }],
       0.3
     );

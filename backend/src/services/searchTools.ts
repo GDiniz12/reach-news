@@ -1,5 +1,6 @@
 import Parser from 'rss-parser';
 import * as cheerio from 'cheerio';
+import { extractSignificantTokens, computeTokenOverlapScore } from './deduplicationService';
 
 const parser = new Parser({
   timeout: 8000,
@@ -25,6 +26,10 @@ export interface RawNewsItem {
 }
 
 export const CATEGORY_QUERIES: Record<string, { pt: string; en: string }> = {
+  last_24h: {
+    pt: 'plantão últimas notícias Brasil mundo últimas 24 horas fatos urgentes hoje',
+    en: 'breaking news top headlines world today last 24 hours live updates',
+  },
   popular: {
     pt: 'principais notícias Brasil e mundo tecnologia ciência economia hoje',
     en: 'top breaking news world technology science business today',
@@ -153,23 +158,30 @@ function extractDomain(url: string): string {
 
 /**
  * Tool 1: Search Bing News RSS (with real article photos & clean URLs) + Google News RSS fallback
+ * Supports timeframe === '24h' for strict 24-hour news focus
  */
 export async function searchWebNews(
   query: string,
   lang: 'pt' | 'en' = 'pt',
-  limit = 12
+  limit = 12,
+  timeframe: '24h' | 'all' = 'all'
 ): Promise<RawNewsItem[]> {
   const items: RawNewsItem[] = [];
+  const cutoffTime = timeframe === '24h' ? Date.now() - 24 * 60 * 60 * 1000 : 0;
 
   // 1. Primary: Bing News RSS (provides real high-res News:Image for the topic & clean descriptions)
   try {
     const mkt = lang === 'pt' ? 'pt-BR' : 'en-US';
     const cc = lang === 'pt' ? 'BR' : 'US';
-    const encodedQuery = encodeURIComponent(query);
+    const enhancedQuery =
+      timeframe === '24h' && !query.includes('24') && !query.includes('hoje')
+        ? `${query} ${lang === 'pt' ? 'últimas 24 horas hoje' : 'today last 24 hours breaking'}`
+        : query;
+    const encodedQuery = encodeURIComponent(enhancedQuery);
     const bingUrl = `https://www.bing.com/news/search?q=${encodedQuery}&setlang=${mkt}&cc=${cc}&format=rss`;
 
     const feed = await parser.parseURL(bingUrl);
-    for (const item of (feed.items || []).slice(0, limit)) {
+    for (const item of (feed.items || []).slice(0, limit + 6)) {
       const anyItem = item as unknown as Record<string, string>;
       const rawUrl = item.link || '';
       const cleanUrl = extractRealUrlFromBing(rawUrl);
@@ -185,6 +197,14 @@ export async function searchWebNews(
         .trim()
         .slice(0, 400);
 
+      // Check 24-hour cutoff if timeframe === '24h'
+      if (timeframe === '24h' && item.pubDate) {
+        const itemTs = new Date(item.pubDate).getTime();
+        if (!isNaN(itemTs) && itemTs < cutoffTime) {
+          continue; // skip older than 24h
+        }
+      }
+
       if (item.title && cleanUrl) {
         items.push({
           title: item.title.trim(),
@@ -196,22 +216,34 @@ export async function searchWebNews(
           imageUrl: hiResImage,
         });
       }
+
+      if (items.length >= limit) break;
     }
   } catch (err) {
     console.warn(`[SearchTool] Bing RSS warning for "${query}":`, (err as Error).message);
   }
 
-  // 2. Secondary supplement: Google News RSS if we need more sources
+  // 2. Secondary supplement: Google News RSS if we need more sources (uses native 'when:24h' filter)
   if (items.length < 5) {
     try {
       const hl = lang === 'pt' ? 'pt-BR' : 'en-US';
       const gl = lang === 'pt' ? 'BR' : 'US';
       const ceid = lang === 'pt' ? 'BR:pt-419' : 'US:en';
-      const encodedQuery = encodeURIComponent(query);
-      const rssUrl = `https://news.google.com/rss/search?q=${encodedQuery}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
+      const googleQuery =
+        timeframe === '24h'
+          ? `${encodeURIComponent(query)}+when:24h`
+          : encodeURIComponent(query);
+      const rssUrl = `https://news.google.com/rss/search?q=${googleQuery}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
 
       const feed = await parser.parseURL(rssUrl);
-      for (const item of (feed.items || []).slice(0, limit - items.length)) {
+      for (const item of (feed.items || []).slice(0, (limit - items.length) + 6)) {
+        if (timeframe === '24h' && item.pubDate) {
+          const itemTs = new Date(item.pubDate).getTime();
+          if (!isNaN(itemTs) && itemTs < cutoffTime) {
+            continue; // skip older than 24h
+          }
+        }
+
         const rawTitle = item.title || 'Untitled';
         const parts = rawTitle.split(' - ');
         const sourceName = parts.length > 1 ? parts.pop()!.trim() : item.creator || 'News Source';
@@ -229,6 +261,8 @@ export async function searchWebNews(
           publishedAt: item.pubDate || new Date().toISOString(),
           snippet: cleanSnippet || cleanTitle,
         });
+
+        if (items.length >= limit) break;
       }
     } catch (error) {
       console.warn(`[SearchTool] Google RSS warning for "${query}":`, (error as Error).message);
@@ -370,16 +404,30 @@ export async function resolveTopicImage(items: RawNewsItem[], fallbackCategory: 
 /**
  * Tool 3: Discover the top 5 most talked-about trending topics right now
  * Combines Google Trends Daily RSS (BR + US), X/Twitter Trends24 live scrape, and Google News Top Stories
+ * Filters out topics that match already covered headlines.
  */
-export async function fetchTrendingTopics(limit = 5): Promise<string[]> {
+export async function fetchTrendingTopics(
+  limit = 5,
+  excludeHeadlines: string[] = []
+): Promise<string[]> {
   const candidates: string[] = [];
+  const excludedTokenSets = excludeHeadlines.map((h) => extractSignificantTokens(h));
+
+  const isCovered = (text: string) => {
+    if (!excludedTokenSets.length) return false;
+    const tokens = extractSignificantTokens(text);
+    return excludedTokenSets.some((ex) => computeTokenOverlapScore(tokens, ex) >= 0.38);
+  };
 
   // 1. Google Trends Daily RSS (Brazil - real-time search spikes)
   try {
     const trendsFeedBr = await parser.parseURL('https://trends.google.com/trending/rss?geo=BR');
-    for (const item of (trendsFeedBr.items || []).slice(0, 8)) {
+    for (const item of (trendsFeedBr.items || []).slice(0, 10)) {
       if (item.title && item.title.trim().length > 2) {
-        candidates.push(item.title.trim());
+        const clean = item.title.trim();
+        if (!isCovered(clean)) {
+          candidates.push(clean);
+        }
       }
     }
   } catch (err) {
@@ -403,8 +451,10 @@ export async function fetchTrendingTopics(limit = 5): Promise<string[]> {
       const $ = cheerio.load(html);
       $('.trend-card__list li a').each((_, el) => {
         const text = $(el).text().trim().replace(/^#/, '');
-        if (text.length > 3 && candidates.length < 18) {
-          candidates.push(text);
+        if (text.length > 3 && candidates.length < 20) {
+          if (!isCovered(text)) {
+            candidates.push(text);
+          }
         }
       });
     }
@@ -417,10 +467,10 @@ export async function fetchTrendingTopics(limit = 5): Promise<string[]> {
     const topNewsFeed = await parser.parseURL(
       'https://news.google.com/rss?hl=pt-BR&gl=BR&ceid=BR:pt-419'
     );
-    for (const item of (topNewsFeed.items || []).slice(0, 8)) {
+    for (const item of (topNewsFeed.items || []).slice(0, 10)) {
       if (item.title) {
         const cleanHeadline = item.title.split(' - ')[0].trim();
-        if (cleanHeadline.length > 10) {
+        if (cleanHeadline.length > 10 && !isCovered(cleanHeadline)) {
           candidates.push(cleanHeadline);
         }
       }
@@ -451,23 +501,34 @@ export async function fetchTrendingTopics(limit = 5): Promise<string[]> {
 
 /**
  * Tool 4: Discover distinct breaking news topics for a specific platform category
- * so each hourly cycle generates at least 2 different, high-engagement stories per category
+ * Filters out topics matching already covered stories.
  */
 export async function fetchDistinctCategoryTopics(
   category: string,
   count = 2,
-  lang: 'pt' | 'en' = 'pt'
+  lang: 'pt' | 'en' = 'pt',
+  excludeHeadlines: string[] = []
 ): Promise<string[]> {
   const queryObj = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.popular;
   const baseQuery = lang === 'pt' ? queryObj.pt : queryObj.en;
-  const newsItems = await searchWebNews(baseQuery, lang, 14);
+  const newsItems = await searchWebNews(baseQuery, lang, 18);
+
+  const excludedTokenSets = excludeHeadlines.map((h) => extractSignificantTokens(h));
+  const isCovered = (text: string) => {
+    if (!excludedTokenSets.length) return false;
+    const tokens = extractSignificantTokens(text);
+    return excludedTokenSets.some((ex) => computeTokenOverlapScore(tokens, ex) >= 0.38);
+  };
 
   const distinctHeadlines: string[] = [];
   const seenTokens = new Set<string>();
 
   for (const item of newsItems) {
     const cleanTitle = item.title.split(' - ')[0].trim();
-    // Create a signature from the first 3 significant words to avoid duplicate stories on the same event
+    if (isCovered(cleanTitle)) {
+      continue; // Skip topic if it matches an existing story!
+    }
+
     const words = cleanTitle
       .toLowerCase()
       .normalize('NFD')
@@ -490,5 +551,67 @@ export async function fetchDistinctCategoryTopics(
   }
 
   return distinctHeadlines.slice(0, count);
+}
+
+/**
+ * Tool 5: Discover breaking news topics specifically restricted to the last 24 hours
+ * Focuses on urgent real-time headlines with Google News when:24h filter and live trends,
+ * strictly skipping any already covered headlines.
+ */
+export async function fetch24hBreakingTopics(
+  limit = 5,
+  lang: 'pt' | 'en' = 'pt',
+  excludeHeadlines: string[] = []
+): Promise<string[]> {
+  const queryObj = CATEGORY_QUERIES.last_24h || CATEGORY_QUERIES.popular;
+  const baseQuery = lang === 'pt' ? queryObj.pt : queryObj.en;
+  
+  // Search with strict timeframe === '24h'
+  const newsItems = await searchWebNews(baseQuery, lang, 20, '24h');
+  const candidates: string[] = [];
+  const seenTokens = new Set<string>();
+
+  const excludedTokenSets = excludeHeadlines.map((h) => extractSignificantTokens(h));
+  const isCovered = (text: string) => {
+    if (!excludedTokenSets.length) return false;
+    const tokens = extractSignificantTokens(text);
+    return excludedTokenSets.some((ex) => computeTokenOverlapScore(tokens, ex) >= 0.38);
+  };
+
+  for (const item of newsItems) {
+    const cleanTitle = item.title.split(' - ')[0].trim();
+    if (isCovered(cleanTitle)) {
+      continue; // Skip already covered topic!
+    }
+
+    const token = cleanTitle
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length > 3)
+      .slice(0, 3)
+      .join('_');
+
+    if (token && !seenTokens.has(token) && cleanTitle.length > 15) {
+      seenTokens.add(token);
+      candidates.push(cleanTitle);
+    }
+    if (candidates.length >= limit) break;
+  }
+
+  // Supplement with top trending topics if needed
+  if (candidates.length < limit) {
+    const trending = await fetchTrendingTopics(limit, excludeHeadlines);
+    for (const t of trending) {
+      if (!candidates.includes(t) && !isCovered(t)) {
+        candidates.push(t);
+      }
+      if (candidates.length >= limit) break;
+    }
+  }
+
+  return candidates.slice(0, limit);
 }
 

@@ -10,6 +10,12 @@ import { FloatingAiBot } from '@/components/FloatingAiBot';
 import { BrandLogo } from '@/components/BrandLogo';
 import { recordUserSignal } from '@/lib/telemetry';
 import {
+  formatExactPublishedAt,
+  formatExactDateTime,
+  formatCardPublishedAt,
+} from '@/lib/dateUtils';
+import { resolveImageCredit } from '@/lib/imageUtils';
+import {
   ArrowLeft,
   FileText,
   Layers,
@@ -22,6 +28,8 @@ import {
   Clock,
   Share2,
   Compass,
+  RefreshCw,
+  Camera,
 } from 'lucide-react';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
@@ -37,6 +45,7 @@ export default function StoryDetailPage() {
 
   const [story, setStory] = useState<Story | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<boolean>(false);
   // Default to full journalistic article ('article') so the user immediately sees the Perplexity Discover editorial body
   const [viewMode, setViewMode] = useState<'article' | 'particle'>('article');
   const [messages, setMessages] = useState<StoryChatMessage[]>([]);
@@ -68,19 +77,74 @@ export default function StoryDetailPage() {
     localStorage.setItem('reach_news_lang', newLang);
   };
 
-  useEffect(() => {
+  const fetchWithRetry = async (
+    url: string,
+    options?: RequestInit,
+    maxRetries = 2,
+    baseDelayMs = 1200
+  ): Promise<any> => {
+    let lastError: any = null;
+    let delay = baseDelayMs;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        if (res.ok) {
+          return await res.json();
+        }
+        if (res.status === 404) {
+          // Explicit 404 means story not found
+          return null;
+        }
+        // If server returns 500/502/503/504 (typical in production cold start), wait and retry
+        if (res.status >= 500 && attempt < maxRetries) {
+          console.warn(
+            `[StoryPage] Server HTTP ${res.status} on attempt ${attempt + 1}. Retrying in ${delay}ms...`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          delay *= 1.5;
+          continue;
+        }
+        return await res.json().catch(() => null);
+      } catch (err) {
+        lastError = err;
+        if (attempt < maxRetries) {
+          console.warn(
+            `[StoryPage] Network error on attempt ${attempt + 1}. Retrying in ${delay}ms...`,
+            err
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          delay *= 1.5;
+          continue;
+        }
+      }
+    }
+    throw lastError || new Error('Falha na comunicação com o servidor');
+  };
+
+  const loadStory = async () => {
     if (!slug) return;
     setLoading(true);
-    fetch(`${API_BASE_URL}/api/stories/${encodeURIComponent(slug)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.story) {
-          setStory(data.story);
-          setMessages(data.story.chatMessages || []);
-        }
-      })
-      .catch((err) => console.error('Error loading story:', err))
-      .finally(() => setLoading(false));
+    setLoadError(false);
+    try {
+      const cleanSlug = decodeURIComponent(slug).trim();
+      const url = `${API_BASE_URL}/api/stories/${encodeURIComponent(cleanSlug)}`;
+      const data = await fetchWithRetry(url);
+      if (data?.story) {
+        setStory(data.story);
+        setMessages(data.story.chatMessages || []);
+      } else {
+        setStory(null);
+      }
+    } catch (err) {
+      console.error('Error loading story:', err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadStory();
   }, [slug]);
 
   useEffect(() => {
@@ -160,11 +224,54 @@ export default function StoryDetailPage() {
     }
   };
 
-  const handleShare = () => {
-    if (typeof window !== 'undefined') {
-      navigator.clipboard.writeText(window.location.href);
+  const handleShare = async () => {
+    if (typeof window === 'undefined') return;
+    const currentLang = lang;
+    const canonicalSlug = story?.slug || story?.id || slug;
+    const shareUrl = `${window.location.origin}/story/${encodeURIComponent(canonicalSlug)}?lang=${currentLang}`;
+    const shareTitle = story
+      ? currentLang === 'pt'
+        ? story.titlePt
+        : story.titleEn
+      : document.title;
+    const shareText = story
+      ? currentLang === 'pt'
+        ? story.summaryPt
+        : story.summaryEn
+      : '';
+
+    // If device supports Web Share API (mobile Chrome, Safari, etc.)
+    if (navigator.share && typeof navigator.canShare === 'function') {
+      try {
+        if (navigator.canShare({ url: shareUrl })) {
+          await navigator.share({
+            title: shareTitle,
+            text: shareText,
+            url: shareUrl,
+          });
+          return;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return; // User simply closed share menu
+      }
+    }
+
+    // Standard clipboard copy fallback
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = shareUrl;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => setCopied(false), 2200);
+    } catch {
+      // ignore
     }
   };
 
@@ -265,12 +372,48 @@ export default function StoryDetailPage() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#191a1a] flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <h1 className="font-editorial text-2xl text-[#ececec]">
+          {lang === 'pt' ? 'Não foi possível carregar a notícia' : 'Unable to load story'}
+        </h1>
+        <p className="text-xs text-[#8e9293] max-w-md leading-relaxed mb-2">
+          {lang === 'pt'
+            ? 'O servidor pode estar inicializando ou houve uma oscilação temporária de conexão.'
+            : 'The server may be waking up or there was a temporary connection latency.'}
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={loadStory}
+            className="px-5 py-2.5 rounded-full bg-[#53b8bb] text-[#111313] font-semibold text-sm inline-flex items-center gap-2 transition hover:bg-[#66c7ca]"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>{lang === 'pt' ? 'Tentar Novamente' : 'Try Again'}</span>
+          </button>
+          <Link
+            href="/"
+            className="px-5 py-2.5 rounded-full bg-[#202222] hover:bg-[#282b2b] text-[#ececec] font-semibold text-sm inline-flex items-center gap-2 border border-white/10"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>{lang === 'pt' ? 'Voltar ao Discover' : 'Back to Discover'}</span>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   if (!story) {
     return (
       <div className="min-h-screen bg-[#191a1a] flex flex-col items-center justify-center gap-4 px-4 text-center">
         <h1 className="font-editorial text-3xl text-[#ececec]">
           {lang === 'pt' ? 'Notícia não encontrada' : 'Story not found'}
         </h1>
+        <p className="text-xs text-[#8e9293] max-w-md leading-relaxed mb-2">
+          {lang === 'pt'
+            ? 'Esta matéria pode ter expirado ou o link acessado está incorreto.'
+            : 'This story may have expired or the link accessed is incorrect.'}
+        </p>
         <Link
           href="/"
           className="px-5 py-2.5 rounded-full bg-[#53b8bb] text-[#111313] font-semibold text-sm inline-flex items-center gap-2"
@@ -288,11 +431,9 @@ export default function StoryDetailPage() {
   const bullets = lang === 'pt' ? story.bulletPointsPt : story.bulletPointsEn;
   const perspectives = lang === 'pt' ? story.perspectivesPt : story.perspectivesEn;
   const fullArticle = lang === 'pt' ? story.fullArticlePt : story.fullArticleEn;
+  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
 
-  const hoursDiff = Math.max(
-    1,
-    Math.round((Date.now() - new Date(story.publishedAt).getTime()) / (1000 * 60 * 60))
-  );
+
 
   return (
     <div className="min-h-screen bg-[#191a1a] text-[#ececec] flex flex-col justify-between">
@@ -378,11 +519,14 @@ export default function StoryDetailPage() {
               <span className="px-2.5 py-1 rounded-md bg-[#202222] text-[#53b8bb] font-semibold border border-white/[0.06]">
                 {topicTag}
               </span>
-              <span className="flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5" />
-                {lang === 'pt'
-                  ? `Publicado há ${hoursDiff} ${hoursDiff === 1 ? 'hora' : 'horas'}`
-                  : `Published ${hoursDiff} ${hoursDiff === 1 ? 'hour' : 'hours'} ago`}
+              <span
+                className="flex items-center gap-1.5 text-xs text-[#ececec] font-sans"
+                title={formatExactDateTime(story.publishedAt, lang)}
+              >
+                <Clock className="w-3.5 h-3.5 text-[#53b8bb]" />
+                <time dateTime={story.publishedAt} suppressHydrationWarning className="font-medium">
+                  {formatExactPublishedAt(story.publishedAt, lang)}
+                </time>
               </span>
             </div>
 
@@ -437,6 +581,27 @@ export default function StoryDetailPage() {
                 className="w-full h-full object-cover"
               />
             </div>
+            {/* Attribution / photo source below image */}
+            <figcaption className="mt-2.5 px-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-[#8e9293] font-sans">
+              <span className="flex items-center gap-1.5">
+                <Camera className="w-3.5 h-3.5 text-[#53b8bb]" />
+                <span>
+                  {lang === 'pt' ? 'Fonte da foto:' : 'Photo source:'}{' '}
+                  <span className="text-[#ececec] font-medium">{imageCredit.name}</span>
+                </span>
+              </span>
+              {imageCredit.url && (
+                <a
+                  href={imageCredit.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[#8e9293] hover:text-[#53b8bb] transition text-[11px]"
+                >
+                  <span>{imageCredit.domain || (lang === 'pt' ? 'Ver publicação' : 'View source')}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </figcaption>
           </figure>
 
           {/* BODY CONTENT */}
@@ -526,6 +691,14 @@ export default function StoryDetailPage() {
                     <h4 className="font-sans text-[#ececec] text-xs font-medium leading-snug line-clamp-2 group-hover:underline">
                       {src.title}
                     </h4>
+                    {src.publishedAt && (
+                      <div className="flex items-center gap-1 text-[11px] text-[#8e9293] mt-2 font-mono">
+                        <Clock className="w-2.5 h-2.5 text-[#53b8bb]" />
+                        <time dateTime={src.publishedAt} suppressHydrationWarning>
+                          {formatCardPublishedAt(src.publishedAt, lang)}
+                        </time>
+                      </div>
+                    )}
                   </div>
                 </a>
               ))}

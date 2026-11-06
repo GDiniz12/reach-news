@@ -3,7 +3,13 @@
 import React from 'react';
 import Link from 'next/link';
 import { Story } from '@/lib/types';
-import { Clock, Heart, MoreHorizontal, Sparkles } from 'lucide-react';
+import { Clock, Heart, MoreHorizontal, Sparkles, Camera } from 'lucide-react';
+import {
+  formatHeroPublishedAt,
+  formatCardPublishedAt,
+  formatExactDateTime,
+} from '@/lib/dateUtils';
+import { resolveImageCredit } from '@/lib/imageUtils';
 
 const BADGE_COLORS = [
   'bg-[#1e6091] text-white',
@@ -50,14 +56,24 @@ export function SourceIconsCluster({
 }
 
 function getRelativeTime(publishedAt: string, lang: 'pt' | 'en') {
-  const hours = Math.max(
-    1,
-    Math.round((Date.now() - new Date(publishedAt).getTime()) / (1000 * 60 * 60))
-  );
-  if (lang === 'pt') {
-    return `Publicado há ${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+  const diffMs = Date.now() - new Date(publishedAt).getTime();
+  const diffMinutes = Math.max(1, Math.round(diffMs / (1000 * 60)));
+  if (diffMinutes < 60) {
+    return lang === 'pt'
+      ? `Publicado há ${diffMinutes} min`
+      : `Published ${diffMinutes}m ago`;
   }
-  return `Published ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  const hours = Math.round(diffMinutes / 60);
+  if (hours < 24) {
+    if (lang === 'pt') {
+      return `Publicado há ${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+    }
+    return `Published ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  }
+  const days = Math.round(hours / 24);
+  return lang === 'pt'
+    ? `Publicado há ${days} ${days === 1 ? 'dia' : 'dias'}`
+    : `Published ${days}d ago`;
 }
 
 interface HeroStoryProps {
@@ -82,6 +98,7 @@ export function DiscoverHeroStory({
   const title = lang === 'pt' ? story.titlePt : story.titleEn;
   const summary = lang === 'pt' ? story.summaryPt : story.summaryEn;
   const href = `/story/${encodeURIComponent(story.slug || story.id)}?lang=${lang}`;
+  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
 
   return (
     <div className="group py-4 sm:py-6">
@@ -94,8 +111,20 @@ export function DiscoverHeroStory({
             </h1>
 
             <div className="flex flex-wrap items-center gap-2 text-[#8e9293] text-[13.5px] font-sans">
-              <Clock className="w-3.5 h-3.5 stroke-[2]" />
-              <span>{getRelativeTime(story.publishedAt, lang)}</span>
+              <Clock className="w-3.5 h-3.5 stroke-[2] text-[#53b8bb]" />
+              <time
+                dateTime={story.publishedAt}
+                suppressHydrationWarning
+                title={formatExactDateTime(story.publishedAt, lang)}
+                className="text-[#ececec] font-medium"
+              >
+                {formatHeroPublishedAt(story.publishedAt, lang)}
+              </time>
+              {((Date.now() - new Date(story.publishedAt).getTime()) <= 24 * 60 * 60 * 1000 || story.category === 'last_24h') && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#53b8bb]/15 border border-[#53b8bb]/30 text-[#53b8bb] text-[11px] font-semibold">
+                  <span>24h</span>
+                </span>
+              )}
               {story.isJustGenerated && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#53b8bb]/20 border border-[#53b8bb]/50 text-[#53b8bb] text-[11px] font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#53b8bb] animate-pulse" />
@@ -162,6 +191,18 @@ export function DiscoverHeroStory({
               className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
             />
           </Link>
+          <div className="mt-2 px-1 flex items-center justify-between text-[11.5px] text-[#8e9293]">
+            <span className="flex items-center gap-1.5">
+              <Camera className="w-3 h-3 text-[#53b8bb]" />
+              <span>
+                {lang === 'pt' ? 'Fonte da foto:' : 'Photo source:'}{' '}
+                <span className="text-[#ececec] font-medium">{imageCredit.name}</span>
+              </span>
+            </span>
+            {imageCredit.domain && (
+              <span className="text-[10.5px] opacity-60 font-mono">{imageCredit.domain}</span>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -184,6 +225,7 @@ export function StoryCard({ story, lang, isSaved, onToggleSave }: StoryCardProps
   const title = lang === 'pt' ? story.titlePt : story.titleEn;
   const summary = lang === 'pt' ? story.summaryPt : story.summaryEn;
   const href = `/story/${encodeURIComponent(story.slug || story.id)}?lang=${lang}`;
+  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
 
   return (
     <div
@@ -205,23 +247,44 @@ export function StoryCard({ story, lang, isSaved, onToggleSave }: StoryCardProps
             <span>{lang === 'pt' ? 'Gerada agora' : 'Generated now'}</span>
           </div>
         )}
+        <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-[#111313]/85 backdrop-blur-md text-[10.5px] text-[#c5c9ca] flex items-center gap-1 border border-white/10 shadow-sm pointer-events-none">
+          <Camera className="w-2.5 h-2.5 text-[#53b8bb]" />
+          <span className="truncate max-w-[130px]">{imageCredit.name}</span>
+        </div>
       </Link>
 
       <div className="flex-1 flex flex-col justify-between p-5">
         <Link href={href} className="block space-y-2.5">
-          {story.isJustGenerated ? (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#53b8bb]/15 text-[#53b8bb] text-[10.5px] font-semibold">
-              <Sparkles className="w-2.5 h-2.5" />
-              <span>{lang === 'pt' ? 'Gerada agora' : 'Generated now'}</span>
-            </div>
-          ) : (
-            (story.matchReasonPt || story.matchReasonEn) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {((Date.now() - new Date(story.publishedAt).getTime()) <= 24 * 60 * 60 * 1000 || story.category === 'last_24h') && (
+              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#53b8bb]/15 text-[#53b8bb] text-[10.5px] font-semibold">
+                <Clock className="w-2.5 h-2.5" />
+                <span>24h</span>
+              </div>
+            )}
+            {story.isJustGenerated ? (
               <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#53b8bb]/15 text-[#53b8bb] text-[10.5px] font-semibold">
                 <Sparkles className="w-2.5 h-2.5" />
-                <span>{lang === 'pt' ? story.matchReasonPt : story.matchReasonEn}</span>
+                <span>{lang === 'pt' ? 'Gerada agora' : 'Generated now'}</span>
               </div>
-            )
-          )}
+            ) : (
+              (story.matchReasonPt || story.matchReasonEn) && (
+                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#53b8bb]/15 text-[#53b8bb] text-[10.5px] font-semibold">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  <span>{lang === 'pt' ? story.matchReasonPt : story.matchReasonEn}</span>
+                </div>
+              )
+            )}
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-[#8e9293] font-medium ml-auto"
+              title={formatExactDateTime(story.publishedAt, lang)}
+            >
+              <Clock className="w-2.5 h-2.5 text-[#53b8bb]" />
+              <time dateTime={story.publishedAt} suppressHydrationWarning>
+                {formatCardPublishedAt(story.publishedAt, lang)}
+              </time>
+            </span>
+          </div>
           <h3 className="font-editorial text-[#ececec] group-hover:text-[#53b8bb] transition-colors text-[21px] leading-[1.28] font-normal line-clamp-3">
             {title}
           </h3>
