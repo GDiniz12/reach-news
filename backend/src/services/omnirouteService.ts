@@ -310,15 +310,16 @@ export async function researchAndSynthesizeStory(params: {
   category: string;
   lang?: 'pt' | 'en';
   isRadar?: boolean;
-  timeframe?: '24h' | 'all';
+  timeframe?: '24h' | 'recent' | 'all';
 }): Promise<GeneratedStoryPayload> {
-  const { query, category, lang = 'pt', isRadar = false, timeframe = 'all' } = params;
+  const { query, category, lang = 'pt', isRadar = false, timeframe = 'recent' } = params;
   const is24h = timeframe === '24h' || category === 'last_24h';
+  const effectiveTimeframe: '24h' | 'recent' = is24h ? '24h' : 'recent';
   const { client, config } = await createOmniRouteClient();
 
-  // 1. Gather live news prioritizing the user's selected language + international sources with 24h filter if requested
-  const primaryItems = await searchWebNews(query, lang, 12, is24h ? '24h' : 'all');
-  const secondaryItems = await searchWebNews(query, lang === 'pt' ? 'en' : 'pt', 6, is24h ? '24h' : 'all');
+  // 1. Gather live news strictly respecting recency (24h or recent 48-72h, never stale historical news)
+  const primaryItems = await searchWebNews(query, lang, 12, effectiveTimeframe);
+  const secondaryItems = await searchWebNews(query, lang === 'pt' ? 'en' : 'pt', 6, effectiveTimeframe);
   const collectedItems: RawNewsItem[] = [...primaryItems, ...secondaryItems];
 
   // 2. Scrape full paragraphs from the top 4 real articles so the journalist AI has rich factual material
@@ -351,44 +352,57 @@ export async function researchAndSynthesizeStory(params: {
   const excerptsText = deepExcerpts.join('\n\n====================\n\n');
 
   // Load recent story headlines from PostgreSQL to instruct the AI not to duplicate existing coverage
-  const recentCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // Check against all active stories within 7 days
   const recentStories = await prisma.story.findMany({
     where: { publishedAt: { gte: recentCutoff } },
     select: { titlePt: true },
-    take: 20,
+    take: 80,
     orderBy: { publishedAt: 'desc' },
+  });
+
+  const currentDateFormatted = new Date().toLocaleDateString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
   });
 
   const recentHeadlinesPrompt =
     recentStories.length > 0
-      ? `\n\nMANCHETES RECENTES JÁ PUBLICADAS NO PORTAL (É EXPRESSAMENTE PROIBIDO REPETIR OU GERAR MATÉRIA PRATICAMENTE IGUAL A QUALQUER UMA DESSAS):\n${recentStories
+      ? `\n\nMANCHETES JÁ PUBLICADAS NO PORTAL (EM NENHUMA HIPÓTESE REPITA OU GERE NOTÍCIA SOBRE O MESMO FATO):\n${recentStories
+          .slice(0, 50)
           .map((s, idx) => `${idx + 1}. ${s.titlePt}`)
-          .join('\n')}\n\nDIRETRIZ DE INEDITISMO MANDATÓRIO: Se as fontes em tempo real coletadas tratarem do mesmo evento ou anúncio já noticiado acima, você DEVE buscar um fato inédito, novo desdobramento ou escolher outro acontecimento dentre as fontes coletadas para que a matéria seja 100% original e não duplicada.`
+          .join('\n')}\n\nDIRETRIZ DE INEDITISMO MANDATÓRIO ABSOLUTO: O leitor sob hipótese alguma pode ver notícias repetidas ou redundantes. Se as fontes coletadas tratarem de um fato, jogo, anúncio, julgamento ou resultado já noticiado acima, você DEVE buscar um fato inédito dentre as fontes ou focar em um novo ângulo/desdobramento 100% original.`
       : '';
 
   try {
     const temporalInstructionStage1 = is24h
       ? `\n- DIRETRIZ MANDATÓRIA (ÚLTIMAS 24 HORAS): Esta notícia pertence à sessão especial de ÚLTIMAS 24 HORAS do reach.news. A IA DEVE FOCAR ESTRITAMENTE em notícias, fatos e desdobramentos ocorridos nas últimas 24 horas. É PROIBIDO tratar fatos antigos como se fossem novidade de hoje. A manchete e o resumo DEVEM destacar o fato mais recente das últimas 24 horas.`
-      : '';
+      : `\n- DIRETRIZ MANDATÓRIA DE RECÊNCIA (DATA DE HOJE: ${currentDateFormatted}): A notícia DEVE cobrir fatos estritamente recentes ocorridos nos últimos dias/horas. É TERMINANTEMENTE PROIBIDO gerar matérias baseadas em notícias antigas de anos ou meses passados (ex: taxas de juros passadas, eleições passadas, mandatos passados).`;
 
     // STAGE 1: Structured Metadata, Headlines, Standfirst Summary, Takeaways & 360° Perspectives
     const stage1Messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `Você é o Editor-Chefe do reach.news (plataforma de jornalismo estilo Perplexity Discover).
+        content: `Você é o Editor-Chefe do reach.news (plataforma de jornalismo estilo Perplexity Discover). Data de hoje: ${currentDateFormatted}.
 Analise as fontes coletadas em tempo real e gere os metadados estruturados, manchetes precisas, resumo factual denso (standfirst), pontos-chave e múltiplas perspectivas em Português (PT-BR) e Inglês (EN-US).
 REGRAS:
 - Todos os campos terminados em "Pt" DEVEM estar 100% em Português do Brasil (PT-BR).
 - Todos os campos terminados em "En" DEVEM estar 100% em Inglês (EN-US).
 - A manchete ("titlePt" / "titleEn") deve ser jornalística, direta, informativa e natural (ex: "Justiça brasileira proíbe Meta de treinar IA com conteúdo jornalístico" / "Brazil court bars Meta from training AI on news content").
 - O resumo ("summaryPt" / "summaryEn") deve ter 2 frases densas e factuais trazendo os números, nomes e consequências principais.
-- REGRA DE INEDITISMO: Verifique as manchetes recentes do portal. É proibido gerar matérias idênticas ou redundantes sobre o mesmo evento já noticiado.${temporalInstructionStage1}
-- TAXONOMIA E CLASSIFICAÇÃO ESTRITA:
+- REGRA DE TOLERÂNCIA ZERO PARA DUPLICATAS: Verifique as manchetes já publicadas. Em nenhuma hipótese gere matéria sobre o mesmo acontecimento já noticiado.${temporalInstructionStage1}
+- TAXONOMIA E CLASSIFICAÇÃO RIGOROSA:
   A categoria ("detectedCategory") DEVE ser estritamente uma de: sports | technology | science | politics | crime | entertainment | economics | videogames.
-  * POLÍTICA: Governos, chefes de estado, eleições, parlamentos, cúpulas diplomáticas (ex: Mercosul, G20, ONU), leis e STF. JAMAIS classifique política como esportes ou tecnologia.
-  * ESPORTES: Exclusivamente competições atléticas, partidas, clubes, atletas, torneios (Futebol, F1, NBA, UFC, etc.).
-  * ECONOMIA: Banco Central, taxa Selic, juros, inflação, bolsas de valores, finanças, dívida pública e empresas.
-  * VIDEOGAMES: Jogos eletrônicos, consoles (PlayStation, Xbox, Nintendo), estúdios e eSports.
+  * CRIME: Prisões, assassinatos, estupros, agressões sexuais, julgamentos criminais, operações da Polícia Federal, esquemas de fraude, tráfico, letalidade policial. Mesmo que envolva celebridades ou figuras públicas, se o fato central é um crime ou inquérito, classifique como CRIME.
+  * ECONOMIA: Banco Central, taxa Selic, juros, inflação, IPCA, PIB, dívida pública, pacote fiscal, B3, Ibovespa, bolsas, ações, dólar, câmbio, cripto e balanços de empresas.
+  * ESPORTES: Exclusivamente competições esportivas, clubes, atletas, partidas, resultados, torneios (Futebol, F1, NBA, UFC, etc.).
+  * VIDEOGAMES: Jogos eletrônicos, consoles (PlayStation, Xbox, Nintendo Switch), GTA, Zelda, lançamentos de games, eSports e motores gráficos.
+  * CIÊNCIA: Descobertas científicas, astronomia, telescópio James Webb, NASA, SpaceX, física, biologia, vacinas, mulheres na ciência.
+  * ENTRETENIMENTO: Filmes, cinema, streaming (Netflix, HBO), música, shows, novelas, Oscar, CCXP e celebridades (salvo crimes).
+  * POLÍTICA: Eleições, Congresso Nacional, Senado, Câmara, STF, cúpulas diplomáticas (Mercosul, G20, ONU), leis e partidos.
+  * TECNOLOGIA: Inteligência artificial, LLMs, OpenAI, semicondutores, chips Nvidia, computação em nuvem, cibersegurança e big tech.
 - TAG DO TÓPICO ("topicTagPt" / "topicTagEn"):
   Deve ser uma tag jornalística concisa de 2 a 3 palavras elegantes (ex: "Fórmula 1", "Inteligência Artificial", "Eleições 2026", "Política Monetária", "Futebol Europeu"). NUNCA use prefixos como "Radar:" ou frases genéricas como "top breaking news".`,
       },
@@ -431,7 +445,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
       client,
       config.omnirouteModel || 'auto/best-chat',
       stage1Messages,
-      0.4
+      0.35
     );
 
     const rawContent = stage1Res.choices[0]?.message?.content || '';
@@ -852,12 +866,13 @@ export async function saveSynthesizedStoryIfUnique(
   options?: { allowReturnExisting?: boolean }
 ): Promise<{ story: any; isDuplicate: boolean; reason?: string }> {
   const { client, config } = await createOmniRouteClient();
-  const threeDaysAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  // Check against ALL stories currently active in the database (within full 7-day retention window)
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const recentStories = await prisma.story.findMany({
-    where: { publishedAt: { gte: threeDaysAgo } },
+    where: { publishedAt: { gte: sevenDaysAgo } },
     include: { sources: { select: { url: true } } },
-    take: 60,
+    take: 200,
     orderBy: { publishedAt: 'desc' },
   });
 
@@ -883,6 +898,15 @@ export async function saveSynthesizedStoryIfUnique(
     }
     return { story: null, isDuplicate: true, reason: dupCheck.reason };
   }
+
+  // Final rigorous category check before database insertion to guarantee 100% theme accuracy
+  const finalCategoryCheck = classifyStoryCategory({
+    title: generated.titlePt,
+    summary: generated.summaryPt,
+    content: generated.fullArticlePt,
+    hintCategory: generated.category,
+  });
+  generated.category = finalCategoryCheck.category;
 
   const storyPublishedAt = generated.publishedAt
     ? new Date(generated.publishedAt)
@@ -961,21 +985,23 @@ export async function runHourlyEditorialCycle(): Promise<{
     console.log('[Hourly Cycle] 1/3 Purging stories older than 7 days...');
     deletedExpired = await purgeExpiredStories(7);
 
-    // Fetch recent headlines to exclude already covered topics
-    const recentCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    // Fetch recent headlines to exclude already covered topics across the entire active retention window
+    const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const recentStories = await prisma.story.findMany({
       where: { publishedAt: { gte: recentCutoff } },
       select: { titlePt: true },
-      take: 60,
+      take: 150,
+      orderBy: { publishedAt: 'desc' },
     });
     const excludeHeadlines = recentStories.map((s) => s.titlePt);
 
     // Step 2: Top 5 most talked-about trending topics right now across Google Trends, X/Twitter, and major press
     console.log('[Hourly Cycle] 2/3 Fetching Top 5 viral/trending topics (Google Trends + X/Twitter + Top Media)...');
-    const topTrendingTopics = await fetchTrendingTopics(5, excludeHeadlines);
-    console.log('[Hourly Cycle] Top 5 Trending Topics discovered (excluding existing):', topTrendingTopics);
+    const topTrendingTopics = await fetchTrendingTopics(8, excludeHeadlines);
+    console.log('[Hourly Cycle] Top Trending Topics discovered (excluding existing):', topTrendingTopics);
 
     for (const topic of topTrendingTopics) {
+      if (trendingGenerated >= 5) break;
       try {
         console.log(`[Hourly Cycle - Trending] Synthesizing flagship story for: "${topic}"`);
         const generated = await researchAndSynthesizeStory({
@@ -983,9 +1009,13 @@ export async function runHourlyEditorialCycle(): Promise<{
           category: 'popular',
           lang: 'pt',
           isRadar: false,
+          timeframe: 'recent',
         });
         const res = await saveSynthesizedStoryIfUnique(generated);
-        if (res.story && !res.isDuplicate) trendingGenerated++;
+        if (res.story && !res.isDuplicate) {
+          trendingGenerated++;
+          excludeHeadlines.push(generated.titlePt);
+        }
       } catch (err) {
         console.warn(`[Hourly Cycle - Trending] Error generating topic "${topic}":`, (err as Error).message);
       }
@@ -1008,8 +1038,10 @@ export async function runHourlyEditorialCycle(): Promise<{
 
     for (const category of editorialCategories) {
       try {
-        const distinctTopics = await fetchDistinctCategoryTopics(category, 2, 'pt', excludeHeadlines);
+        const distinctTopics = await fetchDistinctCategoryTopics(category, 3, 'pt', excludeHeadlines);
+        let catCount = 0;
         for (const topicQuery of distinctTopics) {
+          if (catCount >= 2) break;
           try {
             console.log(`[Hourly Cycle - ${category.toUpperCase()}] Synthesizing story for: "${topicQuery}"`);
             const generated = await researchAndSynthesizeStory({
@@ -1017,20 +1049,14 @@ export async function runHourlyEditorialCycle(): Promise<{
               category,
               lang: 'pt',
               isRadar: false,
+              timeframe: 'recent',
             });
-            // Safeguard: Do not force political news into sports or vice-versa
-            if (generated.category !== category) {
-              const verified = classifyStoryCategory({
-                title: generated.titlePt,
-                summary: generated.summaryPt,
-                hintCategory: category,
-              });
-              if (verified.category === category) {
-                generated.category = category;
-              }
-            }
             const res = await saveSynthesizedStoryIfUnique(generated);
-            if (res.story && !res.isDuplicate) categoryGenerated++;
+            if (res.story && !res.isDuplicate) {
+              categoryGenerated++;
+              catCount++;
+              excludeHeadlines.push(generated.titlePt);
+            }
           } catch (innerErr) {
             console.warn(
               `[Hourly Cycle - ${category}] Error synthesizing "${topicQuery}":`,
@@ -1070,8 +1096,8 @@ export async function planSmartSearchAngles(params: {
   const { query, lang } = params;
   const cleanQuery = query.trim();
 
-  // Gather live headlines for this query to inspect the breadth of current news coverage
-  const liveItems = await searchWebNews(cleanQuery, lang, 15);
+  // Gather live headlines for this query strictly prioritizing recent news coverage
+  const liveItems = await searchWebNews(cleanQuery, lang, 15, 'recent');
   const headlinesList = liveItems
     .slice(0, 12)
     .map((item, idx) => `${idx + 1}. [${item.sourceName}] ${item.title}`)

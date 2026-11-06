@@ -61,7 +61,7 @@ export function computeTokenOverlapScore(tokensA: Set<string>, tokensB: Set<stri
 }
 
 /**
- * Checks if candidate story shares two or more source URLs with an existing story
+ * Checks if candidate story shares one or more source URLs with an existing story
  */
 export function hasOverlappingSources(
   candidateSources: Array<{ url: string }>,
@@ -69,15 +69,30 @@ export function hasOverlappingSources(
 ): boolean {
   if (!candidateSources?.length || !existingSources?.length) return false;
   const existingUrls = new Set(
-    existingSources.map((s) => s.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0].toLowerCase())
+    existingSources.map((s) =>
+      s.url
+        .replace(/^https?:\/\/(www\.)?/, '')
+        .split('?')[0]
+        .replace(/\/+$/, '')
+        .toLowerCase()
+    )
   );
 
-  let matches = 0;
   for (const src of candidateSources) {
-    const cleanUrl = src.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0].toLowerCase();
-    if (existingUrls.has(cleanUrl)) {
-      matches++;
-      if (matches >= 2) return true;
+    const cleanUrl = src.url
+      .replace(/^https?:\/\/(www\.)?/, '')
+      .split('?')[0]
+      .replace(/\/+$/, '')
+      .toLowerCase();
+    // Exclude generic root homepage searches like reuters.com or bing.com
+    if (
+      cleanUrl.length > 15 &&
+      !cleanUrl.includes('site-search') &&
+      !cleanUrl.endsWith('.com') &&
+      !cleanUrl.endsWith('.br') &&
+      existingUrls.has(cleanUrl)
+    ) {
+      return true; // Single identical source URL indicates same event
     }
   }
   return false;
@@ -105,21 +120,23 @@ Título: "${candidateTitle}"
 Resumo: "${candidateSummary}"`;
 
   const existingList = existingStories
-    .slice(0, 6)
+    .slice(0, 8)
     .map((s, idx) => `[NOTÍCIA ${idx + 1} - ID: ${s.id}]\nTítulo: "${s.titlePt}"\nResumo: "${s.summaryPt}"`)
     .join('\n\n');
 
   const prompt = `Você é o Editor de Controle de Qualidade e Desduplicação Editorial do reach.news.
-Sua missão é analisar se a notícia candidata é SUBSTANCIALMENTE O MESMO FATO/ACONTECIMENTO já coberto por alguma das notícias existentes na redação (mesmo que com palavras, ângulos de redação ou manchetes ligeiramente diferentes).
+Sua missão é analisar com rigor absoluto se a notícia candidata trata do MESMO FATO, MESMO ACONTECIMENTO ou MESMO TEMA CENTRAL já coberto por qualquer notícia existente no portal.
 
 ${candidateContext}
 
 NOTÍCIAS JÁ PUBLICADAS NO BANCO:
 ${existingList}
 
-REGRAS:
-- Retorne "isDuplicate": true se a notícia candidata trata do MESMO acontecimento, mesmo anúncio, mesmo processo judicial, mesma decisão de governo ou mesmo lançamento de produto já noticiado acima, sem nenhum fato novo relevante.
-- Retorne "isDuplicate": false se for um assunto completamente diferente, outro setor, ou se trouxer um desdobramento novo substancial.
+DIRETRIZ DE TOLERÂNCIA ZERO PARA NOTÍCIAS REPETIDAS:
+- EM NENHUMA HIPÓTESE repita notícias no portal.
+- Retorne "isDuplicate": true se a notícia candidata aborda o MESMO evento, mesmo anúncio de produto, mesma votação/decisão judicial, mesmo relatório, mesmo jogo ou mesmo acontecimento político, mesmo que redigida com palavras, manchetes ou ângulos diferentes.
+- Retorne "isDuplicate": false APENAS E EXCLUSIVAMENTE se for um fato jornalístico comprovadamente diferente e novo.
+- Na dúvida, considere SEMPRE "isDuplicate": true para blindar o leitor contra repetições.
 
 Retorne APENAS um JSON válido (sem markdown \`\`\`json):
 {
@@ -132,7 +149,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json):
     const res = await client.chat.completions.create({
       model: model || 'antigravity/gemini-3.8-flash-low',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
+      temperature: 0.1,
     });
 
     const content = res.choices[0]?.message?.content || '';
@@ -161,12 +178,21 @@ export interface ExistingStoryComparisonItem {
   sources?: Array<{ url: string }>;
 }
 
+function normalizeTitleForComparison(title: string): string {
+  return title
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
 /**
  * Full deduplication pipeline:
- * 1. Checks source URL overlap (>=2 matching sources -> duplicate).
- * 2. Checks title token overlap and combined token overlap:
- *    - titleScore >= 0.45 or combinedScore >= 0.38 -> definite duplicate.
- *    - titleScore >= 0.25 or combinedScore >= 0.22 -> borderline match, delegates to AI semantic analysis.
+ * 1. Checks source URL overlap (>=1 matching source -> duplicate).
+ * 2. Checks exact normalized title match.
+ * 3. Checks title token overlap and combined token overlap:
+ *    - titleScore >= 0.40 or (titleScore >= 0.28 && combinedScore >= 0.20) -> definite duplicate.
+ *    - titleScore >= 0.16 or combinedScore >= 0.14 -> borderline match, delegates to AI semantic analysis.
  *    - below threshold -> unique story.
  */
 export async function analyzeCandidateForDuplicates(params: {
@@ -195,11 +221,23 @@ export async function analyzeCandidateForDuplicates(params: {
     return { isDuplicate: false };
   }
 
+  const candidateNorm = normalizeTitleForComparison(candidateTitle);
   const candidateTitleTokens = extractSignificantTokens(candidateTitle);
   const candidateAllTokens = extractSignificantTokens(candidateTitle + ' ' + candidateSummary);
   const borderlineMatches: Array<{ story: ExistingStoryComparisonItem; score: number }> = [];
 
   for (const existing of existingStories) {
+    // 0. Exact normalized title match
+    const existingNorm = normalizeTitleForComparison(existing.titlePt);
+    if (candidateNorm.length > 15 && candidateNorm === existingNorm) {
+      return {
+        isDuplicate: true,
+        duplicateOf: existing,
+        reason: `Título idêntico à notícia já existente "${existing.titlePt}"`,
+        overlapScore: 1.0,
+      };
+    }
+
     // 1. Check sources URL overlap
     if (existing.sources && candidateSources.length > 0) {
       if (hasOverlappingSources(candidateSources, existing.sources)) {
@@ -218,11 +256,10 @@ export async function analyzeCandidateForDuplicates(params: {
 
     const titleScore = computeTokenOverlapScore(candidateTitleTokens, existingTitleTokens);
     const combinedScore = computeTokenOverlapScore(candidateAllTokens, existingAllTokens);
-    const effectiveScore = Math.max(titleScore, combinedScore * 1.25);
+    const effectiveScore = Math.max(titleScore, combinedScore * 1.2);
 
-    // 3. Check for definite duplicate (extremely high overlap)
-    // Only auto-reject without AI if title is almost identical (>= 0.70) OR both title and summary have strong overlap
-    if (titleScore >= 0.70 || (titleScore >= 0.50 && combinedScore >= 0.35)) {
+    // 3. Check for definite duplicate (tightened threshold to prevent any duplicate news)
+    if (titleScore >= 0.40 || (titleScore >= 0.28 && combinedScore >= 0.20)) {
       return {
         isDuplicate: true,
         duplicateOf: existing,
@@ -232,7 +269,7 @@ export async function analyzeCandidateForDuplicates(params: {
     }
 
     // Borderline match -> Collect for AI verification
-    if (titleScore >= 0.25 || combinedScore >= 0.20) {
+    if (titleScore >= 0.16 || combinedScore >= 0.14) {
       borderlineMatches.push({ story: existing, score: Math.max(titleScore, combinedScore) });
     }
   }
@@ -240,7 +277,7 @@ export async function analyzeCandidateForDuplicates(params: {
   // 4. If borderline matches exist, use AI semantic analyzer to resolve
   if (borderlineMatches.length > 0) {
     borderlineMatches.sort((a, b) => b.score - a.score);
-    const topCandidates = borderlineMatches.slice(0, 4).map((m) => m.story);
+    const topCandidates = borderlineMatches.slice(0, 5).map((m) => m.story);
 
     const aiRes = await checkStoryDuplicationWithAi({
       candidateTitle,
@@ -258,6 +295,15 @@ export async function analyzeCandidateForDuplicates(params: {
         duplicateOf: match,
         reason: aiRes.reason || `A IA identificou que o fato já foi coberto em "${match.titlePt}"`,
         overlapScore: borderlineMatches[0]?.score || 0.45,
+      };
+    } else if (borderlineMatches[0]?.score >= 0.32) {
+      // Conservative defensive safeguard: if overlap score is already 32%+ and AI failed or hesitated, treat as duplicate
+      const match = borderlineMatches[0].story;
+      return {
+        isDuplicate: true,
+        duplicateOf: match,
+        reason: `Sobreposição temática preventiva (${Math.round(borderlineMatches[0].score * 100)}%) com "${match.titlePt}"`,
+        overlapScore: borderlineMatches[0].score,
       };
     }
   }
@@ -291,18 +337,28 @@ export async function cleanExistingDuplicateStories(): Promise<{
   const deletedTitles: string[] = [];
 
   for (const story of allStories) {
+    const candidateNorm = normalizeTitleForComparison(story.titlePt);
     const candidateTitleTokens = extractSignificantTokens(story.titlePt);
     const candidateAllTokens = extractSignificantTokens(story.titlePt + ' ' + story.summaryPt);
     let isDupe = false;
 
     for (const existing of seenStories) {
+      const existingNorm = normalizeTitleForComparison(existing.titlePt);
+      if (candidateNorm.length > 15 && candidateNorm === existingNorm) {
+        console.log(`[Deduplication Cleanup] Exact duplicate title: "${story.titlePt}"`);
+        isDupe = true;
+        duplicateIdsToDelete.push(story.id);
+        deletedTitles.push(story.titlePt);
+        break;
+      }
+
       const existingTitleTokens = extractSignificantTokens(existing.titlePt);
       const existingAllTokens = extractSignificantTokens(existing.titlePt + ' ' + existing.summaryPt);
 
       const titleScore = computeTokenOverlapScore(candidateTitleTokens, existingTitleTokens);
       const combinedScore = computeTokenOverlapScore(candidateAllTokens, existingAllTokens);
 
-      if (titleScore >= 0.65 || (titleScore >= 0.45 && combinedScore >= 0.30)) {
+      if (titleScore >= 0.40 || (titleScore >= 0.28 && combinedScore >= 0.20)) {
         console.log(
           `[Deduplication Cleanup] Found duplicate (Title: ${Math.round(titleScore * 100)}%, Combined: ${Math.round(combinedScore * 100)}%): "${story.titlePt}" duplicates "${existing.titlePt}"`
         );

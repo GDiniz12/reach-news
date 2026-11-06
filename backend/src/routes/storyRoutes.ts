@@ -13,7 +13,7 @@ import {
   purgeExpiredStories,
   planSmartSearchAngles,
 } from '../services/omnirouteService';
-import { CATEGORY_QUERIES } from '../services/searchTools';
+import { CATEGORY_QUERIES, fetchDistinctCategoryTopics } from '../services/searchTools';
 import { ensureSeededStories } from '../services/seedService';
 import { authenticateToken, AuthRequest } from './authRoutes';
 
@@ -481,21 +481,50 @@ router.post('/stories/refresh-category', async (req: Request, res: Response) => 
     }
 
     const queryObj = CATEGORY_QUERIES[catKey] || CATEGORY_QUERIES.popular;
-    const searchTopic = customTopic
-      ? String(customTopic)
-      : targetLang === 'pt'
-      ? queryObj.pt
-      : queryObj.en;
 
-    const generated = await researchAndSynthesizeStory({
-      query: searchTopic,
-      category: catKey === 'popular' ? 'technology' : catKey,
-      lang: targetLang,
-      isRadar: false,
+    // Load recent headlines to find a guaranteed distinct, non-duplicate topic
+    const recentStories = await prisma.story.findMany({
+      select: { titlePt: true },
+      take: 60,
+      orderBy: { publishedAt: 'desc' },
     });
+    const excludeHeadlines = recentStories.map((s) => s.titlePt);
 
-    const resUnique = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: true });
-    res.status(201).json({ story: resUnique.story });
+    const candidates = customTopic
+      ? [String(customTopic)]
+      : await fetchDistinctCategoryTopics(catKey, 2, targetLang, excludeHeadlines);
+
+    if (candidates.length === 0) {
+      candidates.push(targetLang === 'pt' ? queryObj.pt : queryObj.en);
+    }
+
+    let finalStory = null;
+    for (const searchTopic of candidates) {
+      const generated = await researchAndSynthesizeStory({
+        query: searchTopic,
+        category: catKey === 'popular' ? 'technology' : catKey,
+        lang: targetLang,
+        isRadar: false,
+        timeframe: 'recent',
+      });
+
+      const resUnique = await saveSynthesizedStoryIfUnique(generated, { allowReturnExisting: false });
+      if (resUnique.story && !resUnique.isDuplicate) {
+        finalStory = resUnique.story;
+        break;
+      }
+    }
+
+    // If all distinct candidates were duplicates of existing coverage, fetch the latest story from this category
+    if (!finalStory) {
+      finalStory = await prisma.story.findFirst({
+        where: catKey !== 'popular' && catKey !== 'all' ? { category: catKey } : {},
+        include: { sources: true },
+        orderBy: { publishedAt: 'desc' },
+      });
+    }
+
+    res.status(201).json({ story: finalStory });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

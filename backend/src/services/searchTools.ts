@@ -31,108 +31,108 @@ export const CATEGORY_QUERIES: Record<string, { pt: string; en: string }> = {
     en: 'breaking news top headlines world today last 24 hours live updates',
   },
   popular: {
-    pt: 'principais notícias Brasil e mundo tecnologia ciência economia hoje',
-    en: 'top breaking news world technology science business today',
+    pt: 'principais notícias Brasil mundo tecnologia ciência economia hoje recentes',
+    en: 'top breaking news world technology science business today recent',
   },
   artificial_intelligence: {
-    pt: 'inteligência artificial modelos LLM OpenAI Google Gemini Anthropic agentes IA',
-    en: 'artificial intelligence LLM models OpenAI Google Gemini Anthropic AI agents',
+    pt: 'inteligência artificial modelos LLM OpenAI Google Gemini Anthropic agentes IA novidades hoje',
+    en: 'artificial intelligence LLM models OpenAI Google Gemini Anthropic AI agents today recent',
   },
   technology: {
-    pt: 'tecnologia inovação big tech software computação em nuvem',
-    en: 'enterprise technology big tech software cloud computing innovation',
+    pt: 'tecnologia inovação big tech software computação nuvem lançamentos hoje recentes',
+    en: 'enterprise technology big tech software cloud computing innovation today recent',
   },
   startups: {
-    pt: 'startups venture capital investimentos unicórnios empreendedorismo tecnologia',
-    en: 'startups venture capital funding unicorns tech entrepreneurship',
+    pt: 'startups venture capital investimentos captação rodadas tecnologia hoje recentes',
+    en: 'startups venture capital funding unicorns tech entrepreneurship today recent',
   },
   cybersecurity: {
-    pt: 'cibersegurança hackers vazamento de dados proteção digital ataques cibernéticos',
-    en: 'cybersecurity hackers data breach digital security cyber attacks',
+    pt: 'cibersegurança hackers vazamento dados proteção digital ataques hoje recentes',
+    en: 'cybersecurity hackers data breach digital security cyber attacks today recent',
   },
   hardware: {
-    pt: 'semicondutores chips Nvidia processadores placas de vídeo smartphones hardware',
-    en: 'semiconductors chips Nvidia processors GPUs smartphones hardware',
+    pt: 'semicondutores chips Nvidia processadores placas vídeo smartphones hardware hoje recentes',
+    en: 'semiconductors chips Nvidia processors GPUs smartphones hardware today recent',
   },
   science: {
-    pt: 'ciência descobertas científicas física biologia pesquisas laboratório',
-    en: 'scientific discoveries physics biology laboratory research breakthroughs',
+    pt: 'ciência descobertas científicas astronomia física pesquisas laboratório hoje recentes',
+    en: 'scientific discoveries physics biology laboratory research breakthroughs today recent',
   },
   space: {
-    pt: 'exploração espacial NASA SpaceX astronomia telescópio James Webb planetas',
-    en: 'space exploration NASA SpaceX astronomy James Webb telescope exoplanets',
+    pt: 'exploração espacial NASA SpaceX astronomia telescópio James Webb lançamentos hoje recentes',
+    en: 'space exploration NASA SpaceX astronomy James Webb telescope launches today recent',
   },
   health: {
-    pt: 'medicina saúde biotecnologia longevidade novos tratamentos neurociência',
-    en: 'medicine healthcare biotechnology longevity clinical trials neuroscience',
+    pt: 'medicina saúde biotecnologia novos tratamentos pesquisas clínicas hoje recentes',
+    en: 'medicine healthcare biotechnology longevity clinical trials neuroscience today recent',
   },
   climate: {
-    pt: 'mudanças climáticas transição energética energia limpa sustentabilidade meio ambiente',
-    en: 'climate change clean energy transition renewable energy sustainability environment',
+    pt: 'mudanças climáticas transição energética energia limpa sustentabilidade meio ambiente hoje recentes',
+    en: 'climate change clean energy transition renewable energy sustainability today recent',
   },
   economics: {
-    pt: 'economia macroeconomia PIB inflação taxa Selic banco central comércio global',
-    en: 'global economy macroeconomics inflation interest rates central banks trade',
+    pt: 'economia macroeconomia inflação IPCA taxa Selic Banco Central mercado financeiro hoje recentes',
+    en: 'global economy macroeconomics inflation interest rates central banks trade today recent',
   },
   finance: {
-    pt: 'mercado financeiro bolsa de valores Ibovespa Wall Street ações investimentos',
-    en: 'stock market Wall Street S&P 500 equities investment banking',
+    pt: 'mercado financeiro bolsa valores Ibovespa Wall Street ações investimentos hoje recentes',
+    en: 'stock market Wall Street S&P 500 equities investment banking today recent',
   },
   crypto: {
-    pt: 'criptomoedas Bitcoin Ethereum blockchain Web3 ativos digitais ETFs cripto',
-    en: 'cryptocurrency Bitcoin Ethereum blockchain Web3 digital assets crypto ETFs',
+    pt: 'criptomoedas Bitcoin Ethereum blockchain Web3 ativos digitais cotação hoje recentes',
+    en: 'cryptocurrency Bitcoin Ethereum blockchain Web3 digital assets price today recent',
   },
   business: {
-    pt: 'negócios grandes empresas fusões e aquisições varejo executivos corporativo',
-    en: 'corporate business mergers and acquisitions retail CEOs strategy',
+    pt: 'negócios grandes empresas fusões aquisições balanços corporativo hoje recentes',
+    en: 'corporate business mergers and acquisitions earnings CEOs strategy today recent',
   },
   politics: {
-    pt: 'política Brasil governo congresso STF eleições políticas públicas',
-    en: 'national politics government congress supreme court elections public policy',
+    pt: 'política Brasil governo federal Congresso STF decisões eleições hoje recentes',
+    en: 'national politics government congress supreme court elections public policy today recent',
   },
   geopolitics: {
-    pt: 'geopolítica diplomacia relações internacionais conflitos globais ONU alianças',
-    en: 'geopolitics international relations global diplomacy foreign policy UN',
+    pt: 'geopolítica diplomacia relações internacionais conflitos globais ONU hoje recentes',
+    en: 'geopolitics international relations global diplomacy foreign policy UN today recent',
   },
   crime: {
-    pt: 'segurança pública justiça investigações operações policiais tribunais',
-    en: 'law enforcement justice system investigations court rulings public safety',
+    pt: 'segurança pública investigações Polícia Federal operações policiais prisões hoje recentes',
+    en: 'law enforcement justice system investigations police operations court rulings today recent',
   },
   sports: {
-    pt: 'esportes olimpíadas basquete NBA tênis atletismo competições mundiais',
-    en: 'sports NBA basketball tennis athletics global championships',
+    pt: 'esportes futebol Brasileirão Champions League basquete NBA F1 resultados hoje recentes',
+    en: 'sports soccer NBA basketball tennis athletics F1 championships today recent',
   },
   football: {
-    pt: 'futebol Brasileirão Copa Libertadores Champions League seleção brasileira mercado da bola',
-    en: 'football soccer Champions League Premier League transfer market World Cup',
+    pt: 'futebol Brasileirão Libertadores Champions League mercado bola jogos hoje recentes',
+    en: 'football soccer Champions League Premier League transfer market matches today recent',
   },
   motorsport: {
-    pt: 'Fórmula 1 automobilismo corridas pilotos construtores GP',
-    en: 'Formula 1 motorsport racing F1 Grand Prix drivers championship',
+    pt: 'Fórmula 1 automobilismo corridas pilotos Ferrari GP treinos hoje recentes',
+    en: 'Formula 1 motorsport racing F1 Grand Prix drivers qualifying today recent',
   },
   entertainment: {
-    pt: 'cinema filmes séries streaming Hollywood premiações Oscar TV',
-    en: 'movies television series streaming Hollywood box office awards',
+    pt: 'cinema filmes séries streaming estreias Hollywood premiações música hoje recentes',
+    en: 'movies television series streaming Hollywood box office music releases today recent',
   },
   music: {
-    pt: 'música shows festivais lançamentos álbuns indústria fonográfica artistas',
-    en: 'music industry concerts festivals album releases artists streaming',
+    pt: 'música shows festivais lançamentos álbuns turnês artistas hoje recentes',
+    en: 'music industry concerts festivals album releases artists tours today recent',
   },
   videogames: {
-    pt: 'videogames jogos lançamentos PlayStation Xbox Nintendo PC gaming',
-    en: 'video games gaming releases PlayStation Xbox Nintendo PC gaming',
+    pt: 'videogames jogos lançamentos PlayStation Xbox Nintendo PC games hoje recentes',
+    en: 'video games gaming releases PlayStation Xbox Nintendo PC gaming updates today recent',
   },
   esports: {
-    pt: 'eSports campeonatos League of Legends Counter-Strike Valorant competitivo',
-    en: 'esports tournaments League of Legends Counter-Strike Valorant pro gaming',
+    pt: 'eSports campeonatos League of Legends CS2 Valorant torneios hoje recentes',
+    en: 'esports tournaments League of Legends CS2 Valorant pro gaming today recent',
   },
   automotive: {
-    pt: 'carros elétricos indústria automotiva veículos autônomos BYD Tesla montadoras',
-    en: 'electric vehicles automotive industry autonomous driving EVs Tesla BYD',
+    pt: 'carros elétricos veículos autônomos indústria automotiva BYD Tesla montadoras hoje recentes',
+    en: 'electric vehicles automotive industry autonomous driving EVs Tesla BYD today recent',
   },
   education: {
-    pt: 'educação universidades ensino superior futuro do trabalho carreira',
-    en: 'higher education universities EdTech future of work careers',
+    pt: 'educação universidades ensino superior mercado trabalho futuro carreira hoje recentes',
+    en: 'higher education universities EdTech future of work careers today recent',
   },
 };
 
@@ -164,10 +164,16 @@ export async function searchWebNews(
   query: string,
   lang: 'pt' | 'en' = 'pt',
   limit = 12,
-  timeframe: '24h' | 'all' = 'all'
+  timeframe: '24h' | 'recent' | 'all' = 'recent'
 ): Promise<RawNewsItem[]> {
   const items: RawNewsItem[] = [];
-  const cutoffTime = timeframe === '24h' ? Date.now() - 24 * 60 * 60 * 1000 : 0;
+  // Recency cutoff: 24 hours for '24h', 72 hours (3 days) for 'recent', or unrestricted for 'all'
+  const cutoffTime =
+    timeframe === '24h'
+      ? Date.now() - 24 * 60 * 60 * 1000
+      : timeframe === 'recent'
+      ? Date.now() - 72 * 60 * 60 * 1000
+      : 0;
 
   // 1. Primary: Bing News RSS (provides real high-res News:Image for the topic & clean descriptions)
   try {
@@ -176,9 +182,14 @@ export async function searchWebNews(
     const enhancedQuery =
       timeframe === '24h' && !query.includes('24') && !query.includes('hoje')
         ? `${query} ${lang === 'pt' ? 'últimas 24 horas hoje' : 'today last 24 hours breaking'}`
+        : timeframe === 'recent' && !query.includes('hoje') && !query.includes('recent')
+        ? `${query} ${lang === 'pt' ? 'notícias recentes hoje' : 'latest news today'}`
         : query;
     const encodedQuery = encodeURIComponent(enhancedQuery);
-    const bingUrl = `https://www.bing.com/news/search?q=${encodedQuery}&setlang=${mkt}&cc=${cc}&format=rss`;
+    // Interval 4 = past 24 hours, Interval 7 = past 7 days (paired with in-code cutoff validation)
+    const intervalParam =
+      timeframe === '24h' ? '&qft=interval%3d"4"' : timeframe === 'recent' ? '&qft=interval%3d"7"' : '';
+    const bingUrl = `https://www.bing.com/news/search?q=${encodedQuery}&setlang=${mkt}&cc=${cc}${intervalParam}&format=rss`;
 
     const feed = await parser.parseURL(bingUrl);
     for (const item of (feed.items || []).slice(0, limit + 6)) {
@@ -197,11 +208,11 @@ export async function searchWebNews(
         .trim()
         .slice(0, 400);
 
-      // Check 24-hour cutoff if timeframe === '24h'
-      if (timeframe === '24h' && item.pubDate) {
+      // Enforce recency cutoff: discard stale articles older than cutoffTime
+      if (cutoffTime > 0 && item.pubDate) {
         const itemTs = new Date(item.pubDate).getTime();
         if (!isNaN(itemTs) && itemTs < cutoffTime) {
-          continue; // skip older than 24h
+          continue; // strictly skip older stories!
         }
       }
 
@@ -223,24 +234,23 @@ export async function searchWebNews(
     console.warn(`[SearchTool] Bing RSS warning for "${query}":`, (err as Error).message);
   }
 
-  // 2. Secondary supplement: Google News RSS if we need more sources (uses native 'when:24h' filter)
+  // 2. Secondary supplement: Google News RSS with native 'when:24h' or 'when:48h' recency filters
   if (items.length < 5) {
     try {
       const hl = lang === 'pt' ? 'pt-BR' : 'en-US';
       const gl = lang === 'pt' ? 'BR' : 'US';
       const ceid = lang === 'pt' ? 'BR:pt-419' : 'US:en';
-      const googleQuery =
-        timeframe === '24h'
-          ? `${encodeURIComponent(query)}+when:24h`
-          : encodeURIComponent(query);
+      const recencyFilter =
+        timeframe === '24h' ? '+when:24h' : timeframe === 'recent' ? '+when:48h' : '';
+      const googleQuery = `${encodeURIComponent(query)}${recencyFilter}`;
       const rssUrl = `https://news.google.com/rss/search?q=${googleQuery}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
 
       const feed = await parser.parseURL(rssUrl);
       for (const item of (feed.items || []).slice(0, (limit - items.length) + 6)) {
-        if (timeframe === '24h' && item.pubDate) {
+        if (cutoffTime > 0 && item.pubDate) {
           const itemTs = new Date(item.pubDate).getTime();
           if (!isNaN(itemTs) && itemTs < cutoffTime) {
-            continue; // skip older than 24h
+            continue; // strictly skip older than cutoff
           }
         }
 
@@ -499,6 +509,49 @@ export async function fetchTrendingTopics(
   return uniqueTopics.slice(0, limit);
 }
 
+const CATEGORY_SUBQUERIES: Record<string, string[]> = {
+  technology: [
+    'inteligência artificial modelos agentes IA novidades hoje',
+    'big tech semicondutores chips Nvidia software novidades hoje',
+    'cibersegurança computação em nuvem startups inovações hoje',
+  ],
+  sports: [
+    'futebol brasileiro Brasileirão rodada mercado da bola hoje',
+    'futebol europeu Champions League Premier League hoje',
+    'Fórmula 1 basquete NBA automobilismo resultados hoje',
+  ],
+  economics: [
+    'Banco Central taxa Selic inflação IPCA juros Copom hoje',
+    'bolsa de valores Ibovespa Wall Street ações câmbio dólar hoje',
+    'política fiscal pacote gastos dívida pública PIB hoje',
+  ],
+  politics: [
+    'Congresso Nacional Senado Câmara dos Deputados votações hoje',
+    'STF Supremo Tribunal Federal decisões governo federal hoje',
+    'relações internacionais diplomacia Mercosul geopolítica hoje',
+  ],
+  science: [
+    'astronomia NASA telescópio James Webb espaço descobertas hoje',
+    'pesquisa científica medicina genética laboratório descobertas hoje',
+    'energia limpa clima física quântica estudos recentes hoje',
+  ],
+  videogames: [
+    'lançamentos games PlayStation 5 Xbox Nintendo Switch hoje',
+    'GTA VI novidades estúdios indústria gamer atualizações hoje',
+    'eSports campeonatos Steam Valve jogos eletrônicos hoje',
+  ],
+  entertainment: [
+    'cinema filmes estreias bilheteria Hollywood premiações hoje',
+    'streaming séries Netflix novidades elenco hoje',
+    'música álbuns shows festivais artistas lançamentos hoje',
+  ],
+  crime: [
+    'Polícia Federal operações policiais mandados prisões hoje',
+    'segurança pública investigações delegacia inquéritos hoje',
+    'justiça julgamento tribunais combate a fraudes hoje',
+  ],
+};
+
 /**
  * Tool 4: Discover distinct breaking news topics for a specific platform category
  * Filters out topics matching already covered stories.
@@ -511,13 +564,14 @@ export async function fetchDistinctCategoryTopics(
 ): Promise<string[]> {
   const queryObj = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.popular;
   const baseQuery = lang === 'pt' ? queryObj.pt : queryObj.en;
-  const newsItems = await searchWebNews(baseQuery, lang, 18);
+  // Always use 'recent' to prevent digging up old articles
+  const newsItems = await searchWebNews(baseQuery, lang, 24, 'recent');
 
   const excludedTokenSets = excludeHeadlines.map((h) => extractSignificantTokens(h));
   const isCovered = (text: string) => {
     if (!excludedTokenSets.length) return false;
     const tokens = extractSignificantTokens(text);
-    return excludedTokenSets.some((ex) => computeTokenOverlapScore(tokens, ex) >= 0.38);
+    return excludedTokenSets.some((ex) => computeTokenOverlapScore(tokens, ex) >= 0.28);
   };
 
   const distinctHeadlines: string[] = [];
@@ -546,8 +600,20 @@ export async function fetchDistinctCategoryTopics(
     if (distinctHeadlines.length >= count) break;
   }
 
-  while (distinctHeadlines.length < count) {
-    distinctHeadlines.push(`${baseQuery} (Destaque ${distinctHeadlines.length + 1})`);
+  // If still need more distinct topics, query category-specific subqueries instead of repeating the base query!
+  if (distinctHeadlines.length < count) {
+    const subqueries = CATEGORY_SUBQUERIES[category] || [];
+    for (const subq of subqueries) {
+      if (distinctHeadlines.length >= count) break;
+      const subItems = await searchWebNews(subq, lang, 10, 'recent');
+      for (const item of subItems) {
+        const cleanTitle = item.title.split(' - ')[0].trim();
+        if (cleanTitle.length > 15 && !isCovered(cleanTitle) && !distinctHeadlines.includes(cleanTitle)) {
+          distinctHeadlines.push(cleanTitle);
+          break;
+        }
+      }
+    }
   }
 
   return distinctHeadlines.slice(0, count);

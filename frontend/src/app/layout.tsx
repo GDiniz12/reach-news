@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'Reach News — Jornalismo Inteligente em Tempo Real',
+  title: 'Reach News',
   description:
     'Plataforma editorial de notícias e síntese multi-fonte por IA utilizando OmniRoute.',
   manifest: '/manifest.json',

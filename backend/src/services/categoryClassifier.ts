@@ -22,114 +22,122 @@ interface CategoryRule {
 
 const CATEGORY_RULES: Record<string, CategoryRule> = {
   sports: {
-    weight: 1.0,
+    weight: 1.2,
     keywords: [
       'futebol', 'champions league', 'libertadores', 'brasileirao', 'brasileirão',
       'premier league', 'copa do mundo', 'nba', 'basquete', 'formula 1', 'fórmula 1',
       'f1', 'tenis', 'tênis', 'atletismo', 'olimpiadas', 'olimpíadas', 'volei', 'vôlei',
-      'atleta', 'tecnico', 'técnico', 'goleiro', 'gol', 'gols', 'goleada', 'rodada',
-      'artilheiro', 'scuderia', 'ferrari', 'red bull', 'mclaren', 'corrida', 'piloto',
-      'pilotos', 'cristiano ronaldo', 'messi', 'neymar', 'real madrid', 'flamengo',
-      'palmeiras', 'corinthians', 'sao paulo fc', 'são paulo fc', 'cruzeiro', 'liverpool',
-      'manchester', 'ufc', 'lutador', 'cinturao', 'cinturão', 'nfl', 'touchdown',
-      'maracana', 'maracanã', 'estadio', 'estádio', 'campeonato', 'torneio esportivo',
-      'transfer market', 'playoffs', 'liga europa', 'liga conferencia', 'liga conferência',
-      'duplantis', 'sheilla castro', 'pierre sage', 'crystal palace', 'trabzonspor',
-      'freiburg', 'klay thompson', 'wiggins', 'chase center',
+      'atleta', 'atletas', 'tecnico de futebol', 'técnico de futebol', 'goleiro', 'gols da partida',
+      'goleada', 'rodada do campeonato', 'artilheiro', 'scuderia', 'ferrari', 'red bull racing',
+      'mclaren', 'corrida de f1', 'piloto da f1', 'piloto de formula 1', 'cristiano ronaldo',
+      'messi', 'neymar', 'real madrid', 'flamengo', 'palmeiras', 'corinthians',
+      'sao paulo fc', 'são paulo fc', 'cruzeiro', 'liverpool fc', 'manchester city',
+      'manchester united', 'ufc', 'mma', 'lutador', 'cinturao', 'cinturão', 'nfl', 'touchdown',
+      'maracana', 'maracanã', 'estadio', 'estádio', 'torneio esportivo', 'transfer market',
+      'playoffs', 'liga europa', 'liga conferencia', 'liga conferência', 'duplantis',
+      'sheilla castro', 'pierre sage', 'crystal palace', 'trabzonspor', 'freiburg',
+      'klay thompson', 'wiggins', 'chase center', 'mundial indoor', 'campeonato de futebol',
     ],
   },
-  politics: {
-    weight: 1.2, // high priority when political entities/offices appear
+  crime: {
+    weight: 1.3,
     keywords: [
-      'lula', 'bolsonaro', 'stf', 'supremo tribunal federal', 'congresso nacional',
-      'senado', 'senador', 'camara dos deputados', 'câmara dos deputados', 'deputado',
-      'ministerio', 'ministério', 'ministro', 'chanceler', 'eleicoes', 'eleições',
-      'eleicao', 'eleição', 'urnas', 'partido', 'partidos', 'pt', 'pl', 'psol',
-      'republicanos', 'democratas', 'trump', 'biden', 'obama', 'casa branca',
-      'governo federal', 'governo', 'governador', 'prefeito', 'prefeitura',
-      'politica', 'política', 'diplomacia', 'relacoes internacionais', 'relações internacionais',
-      'geopolitica', 'geopolítica', 'parlamento', 'sancoes', 'sanções', 'tratado',
-      'cpi', 'projeto de lei', 'pec', 'planalto', 'reeleicao', 'reeleição',
-      'cúpula do mercosul', 'cupula do mercosul', 'mercosul', 'g20', 'brics', 'onu',
-      'segundo turno', 'primeiro turno', 'voto', 'votacao', 'votação', 'midterms',
+      'policia', 'polícia', 'pf', 'policia federal', 'polícia federal', 'policia civil',
+      'polícia civil', 'policia militar', 'polícia militar', 'delegado', 'delegacia',
+      'prisao', 'prisão', 'preso', 'presos', 'mandado de prisao', 'mandado de prisão',
+      'apreensao', 'apreensão', 'trafico', 'tráfico', 'homicidio', 'homicídio', 'assassinato',
+      'estupro', 'agressao sexual', 'agressão sexual', 'golpe financeiro', 'fraude contra',
+      'operacao policial', 'operação policial', 'quadrilha', 'faccao criminosa', 'facção',
+      'tribunal do juri', 'tribunal do júri', 'condenacao criminal', 'condenação criminal',
+      'julgamento criminal', 'penitenciaria', 'penitenciária', 'cadeia', 'letalidade policial',
+      'morte acidental', 'queda de hotel', 'inquerito policial', 'inquérito policial',
+      'espionar dados', 'pericia policial', 'perícia', 'desvio milionario', 'desvio milionário',
+      'lavagem de dinheiro', 'cativeiro', 'sequestro',
     ],
   },
   economics: {
-    weight: 1.1,
+    weight: 1.25,
     keywords: [
-      'banco central', 'bancen', 'bacen', 'selic', 'taxa selic', 'copom', 'juros',
-      'taxa de juros', 'inflacao', 'inflação', 'ipca', 'pib', 'divida publica', 'dívida pública',
+      'banco central', 'bacen', 'selic', 'taxa selic', 'copom', 'juros', 'taxa de juros',
+      'inflacao', 'inflação', 'ipca', 'pib', 'divida publica', 'dívida pública',
       'mercado financeiro', 'bovespa', 'ibovespa', 'b3', 'bolsa de valores', 'wall street',
       'fed', 'federal reserve', 'dolar', 'dólar', 'cambio', 'câmbio', 'receita federal',
       'tesouro nacional', 'corte de gastos', 'pacote fiscal', 'arcabouco fiscal', 'arcabouço fiscal',
-      'fmi', 'fusao', 'fusão', 'aquisicao', 'aquisição', 'lucro liquido', 'lucro líquido',
-      'balanco', 'balanço', 'dividendos', 'startups', 'venture capital', 'fundos de investimento',
-      'cripto', 'criptomoedas', 'bitcoin', 'ethereum', 'etf', 'ueno bank', 'cimed',
-      'haddad', 'galipolo', 'galípolo', 'lara resende', 'andre lara resende', 'andré lara resende',
-      'mercado', 'investidores', 'acoes', 'ações', 'commodities', 'petroleo', 'petróleo',
-      'insurtech', 'seguros', 'credito', 'crédito',
+      'meta fiscal', 'fmi', 'fusao', 'fusão', 'aquisicao', 'aquisição', 'lucro liquido',
+      'lucro líquido', 'balanco trimestral', 'balanço', 'dividendos', 'venture capital',
+      'fundos de investimento', 'cripto', 'criptomoedas', 'bitcoin', 'ethereum', 'etf',
+      'ueno bank', 'haddad', 'galipolo', 'galípolo', 'lara resende', 'andre lara resende',
+      'andré lara resende', 'investidores', 'acoes', 'ações', 'commodities', 'petroleo brent',
+      'petróleo brent', 'insurtech', 'fintech', 'seguros', 'credito', 'crédito',
+      'receita da microsoft', 'vendas da azure', 'mercado de capitais', 'politica fiscal',
+    ],
+  },
+  videogames: {
+    weight: 1.25,
+    keywords: [
+      'videogame', 'videogames', 'video game', 'video games', 'jogos eletronicos', 'jogos eletrônicos',
+      'playstation', 'ps5', 'ps4', 'sony playstation', 'xbox', 'xbox series', 'nintendo',
+      'nintendo switch', 'switch 2', 'steam', 'valve', 'gta vi', 'grand theft auto',
+      'zelda', 'ocarina of time', 'pokemon', 'pokémon', 'epic games', 'unreal engine',
+      'gameplay', 'minigames', 'minigame', 'esports', 'e-sports', 'counter-strike', 'cs2',
+      'valorant', 'league of legends', 'lol', 'dota', 'fortnite', 'roblox', 'ubisoft',
+      'capcom', 'konami', 'game pass', 'black friday do playstation', 'jogos em novembro',
+      'renderizacao neural', 'renderização neural', 'npcs cognitivos',
+    ],
+  },
+  science: {
+    weight: 1.2,
+    keywords: [
+      'telescopio', 'telescópio', 'james webb', 'nasa', 'spacex', 'astronomia', 'planeta',
+      'exoplaneta', 'galaxia', 'galáxia', 'cosmos', 'universo', 'astrofisica', 'astrofísica',
+      'fisica', 'física', 'mecanica quantica', 'mecânica quântica', 'biologia', 'genetica',
+      'genética', 'pesquisa cientifica', 'pesquisa científica', 'cientistas', 'cern',
+      'fusao nuclear', 'fusão nuclear', 'mulheres na ciencia', 'mulheres na ciência',
+      'mulheres cientistas', 'meninas na ciencia', 'meninas na ciência', 'plumas de europa',
+      'encelado', 'encélado', 'telescopio espacial', 'telescópio espacial', 'nancy grace roman',
+      'falcon heavy', 'descoberta cientifica', 'descoberta científica', 'laboratorio',
+    ],
+  },
+  entertainment: {
+    weight: 1.1,
+    keywords: [
+      'cinema', 'filme', 'filmes', 'serie', 'série', 'series', 'séries', 'streaming',
+      'netflix', 'hbo max', 'disney+', 'oscar', 'emmy', 'grammy', 'festival de cinema',
+      'show musical', 'shows', 'turne', 'turnê', 'musica', 'música', 'album', 'álbum',
+      'cantor', 'cantora', 'hollywood', 'ator', 'atriz', 'anitta', 'luiz bacci',
+      'ana maria braga', 'luciano huck', 'tv globo', 'novela', 'novela das nove', 'ccxp',
+      'stallone', 'samuel l. jackson', 'vingadores', 'celebridade', 'famosos', 'bilheteria',
+      'taylor swift', 'beyonce', 'beyoncé', 'quem ama cuida', 'treta', 'oscar isaac',
+      'cineastas', 'cadela pacoca', 'cadela paçoca',
+    ],
+  },
+  politics: {
+    weight: 1.15,
+    keywords: [
+      'lula', 'bolsonaro', 'stf', 'supremo tribunal federal', 'congresso nacional',
+      'senado', 'senador', 'camara dos deputados', 'câmara dos deputados', 'deputado',
+      'eleicoes', 'eleições', 'eleicao', 'eleição', 'urnas', 'partido', 'partidos',
+      'trump', 'biden', 'obama', 'casa branca', 'governo federal', 'planalto',
+      'palacio do planalto', 'diplomacia', 'relacoes internacionais', 'relações internacionais',
+      'geopolitica', 'geopolítica', 'parlamento', 'sancoes', 'sanções', 'cpi',
+      'projeto de lei', 'pec', 'reeleicao', 'reeleição', 'cupula do mercosul',
+      'cúpula do mercosul', 'mercosul', 'g20', 'brics', 'onu', 'segundo turno',
+      'primeiro turno', 'midterms', 'derrota republicana', 'vitoria democrata',
+      'governabilidade', 'novo congresso',
     ],
   },
   technology: {
-    weight: 1.0,
+    weight: 1.1,
     keywords: [
       'inteligencia artificial', 'inteligência artificial', 'ia', 'ai', 'llm', 'llms',
       'openai', 'gemini', 'anthropic', 'dario amodei', 'sam altman', 'deepseek', 'chatgpt',
       'claude', 'nvidia', 'chips', 'semicondutores', 'microsoft', 'google', 'apple',
-      'meta', 'zuckerberg', 'amazon aws', 'aws', 'azure', 'computacao em nuvem', 'computação em nuvem',
-      'cloud', 'software', 'ciberseguranca', 'cibersegurança', 'hacker', 'ransomware',
-      'big tech', 'algoritmo', 'wearable', 'wearables', 'smartphone', 'iphone', 'android',
-      'nothing phone', 'computacao quantica', 'computação quântica', 'robotica', 'robótica',
-      'automacao', 'automação', 'hardware', 'deep learning', 'machine learning',
-    ],
-  },
-  videogames: {
-    weight: 1.2,
-    keywords: [
-      'videogame', 'videogames', 'video game', 'video games', 'jogos eletronicos', 'jogos eletrônicos',
-      'playstation', 'ps5', 'ps4', 'sony playstation', 'xbox', 'xbox series', 'nintendo',
-      'switch', 'switch 2', 'steam', 'valve', 'gta', 'grand theft auto', 'gta vi',
-      'zelda', 'ocarina of time', 'pokemon', 'pokémon', 'epic games', 'unreal engine',
-      'gameplay', 'mod', 'rpg', 'esports', 'e-sports', 'counter-strike', 'cs2', 'valorant',
-      'league of legends', 'lol', 'dota', 'fortnite', 'roblox', 'ubisoft', 'ea sports',
-      'capcom', 'konami', 'game pass', 'black friday do playstation',
-    ],
-  },
-  entertainment: {
-    weight: 1.0,
-    keywords: [
-      'cinema', 'filme', 'filmes', 'serie', 'série', 'series', 'séries', 'streaming',
-      'netflix', 'hbo', 'max', 'disney', 'disney+', 'oscar', 'emmy', 'grammy',
-      'festival', 'show', 'shows', 'turne', 'turnê', 'musica', 'música', 'album', 'álbum',
-      'cantor', 'cantora', 'clipe', 'hollywood', 'ator', 'atriz', 'anitta', 'luiz bacci',
-      'ana maria braga', 'luciano huck', 'tv globo', 'novela', 'novela das nove', 'ccxp',
-      'stallone', 'samuel l. jackson', 'vingadores', 'celebridade', 'famosos', 'bilheteria',
-      'bilheterias', 'taylor swift', 'beyonce', 'beyoncé',
-    ],
-  },
-  science: {
-    weight: 1.1,
-    keywords: [
-      'telescopio', 'telescópio', 'james webb', 'nasa', 'spacex', 'astronomia', 'planeta',
-      'exoplaneta', 'galaxia', 'galáxia', 'cosmos', 'universo', 'astrofisica', 'astrofísica',
-      'fisica', 'física', 'mecanica quantica', 'mecânica quântica', 'biologia', 'genetica', 'genética',
-      'medicina', 'vacina', 'pesquisadores', 'cientistas', 'cern', 'fusao nuclear', 'fusão nuclear',
-      'clima', 'meio ambiente', 'aquecimento global', 'mulheres na ciencia', 'mulheres na ciência',
-      'plumas de europa', 'encelado', 'encélado', 'telescopio espacial', 'telescópio espacial',
-      'nancy grace roman',
-    ],
-  },
-  crime: {
-    weight: 1.1,
-    keywords: [
-      'policia', 'polícia', 'pf', 'policia federal', 'polícia federal', 'policia civil',
-      'polícia civil', 'policia militar', 'polícia militar', 'delegado', 'prisao', 'prisão',
-      'preso', 'presos', 'mandado de prisao', 'mandado de prisão', 'apreensao', 'apreensão',
-      'trafico', 'tráfico', 'homicidio', 'homicídio', 'assassinato', 'estupro', 'agressao',
-      'agressão', 'golpe', 'fraude', 'operacao policial', 'operação policial', 'quadrilha',
-      'faccao', 'facção', 'cnj', 'tribunal', 'julgamento', 'condenacao', 'condenação',
-      'juri', 'júri', 'cadeia', 'penitenciaria', 'penitenciária', 'letalidade policial',
-      'russell brand', 'policial civil', 'espionagem', 'investigacao', 'investigação',
+      'meta', 'amazon aws', 'computacao em nuvem', 'computação em nuvem', 'cloud computing',
+      'software', 'ciberseguranca', 'cibersegurança', 'hacker', 'ransomware', 'big tech',
+      'wearable', 'wearables', 'smartphone', 'iphone', 'android', 'nothing phone',
+      'computacao quantica', 'computação quântica', 'robotica', 'robótica', 'deep learning',
+      'machine learning', 'startups tech', 'roteadores de ia', 'agentes autonomos',
+      'calendario tech', 'agenda tech',
     ],
   },
 };
@@ -146,7 +154,8 @@ function normalizeText(text: string): string {
 
 /**
  * Accurately classifies the category of a news story based on title, summary, and content.
- * Prevents political/economic news from erroneously leaking into sports, and vice versa.
+ * Prioritizes the Title heavily (multiplier 4.0), followed by Summary (2.0),
+ * and enforces strict domain rules to prevent cross-contamination.
  */
 export function classifyStoryCategory(params: {
   title: string;
@@ -155,8 +164,191 @@ export function classifyStoryCategory(params: {
   hintCategory?: string;
 }): { category: string; confidence: number; detectedReason: string } {
   const { title, summary = '', content = '', hintCategory } = params;
-  const fullText = normalizeText(`${title} ${title} ${summary} ${content.slice(0, 1000)}`);
+  const normTitle = normalizeText(title);
+  const normSummary = normalizeText(summary);
+  const normContent = normalizeText(content.slice(0, 800));
 
+  // STEP 1: ABSOLUTE HARD TITLE SAFEGUARDS (Highest Editorial Authority)
+  // If the headline explicitly defines the core fact, do not let tangential keywords override it!
+
+  // 1.1 CRIME HARD RULES: Arrests, trials, rapes, murders, police raids, police lethality
+  if (
+    normTitle.includes('estupro') ||
+    normTitle.includes('agressao sexual') ||
+    normTitle.includes('homicidio') ||
+    normTitle.includes('assassinato') ||
+    normTitle.includes('chacina') ||
+    normTitle.includes('latrocinio') ||
+    normTitle.includes('preso') ||
+    normTitle.includes('prisao') ||
+    normTitle.includes('mandado de prisao') ||
+    normTitle.includes('operacao da pf') ||
+    normTitle.includes('policia federal investiga') ||
+    normTitle.includes('policia investiga') ||
+    normTitle.includes('pf investiga') ||
+    normTitle.includes('letalidade policial') ||
+    normTitle.includes('acoes policiais') ||
+    normTitle.includes('golpe financeiro') ||
+    normTitle.includes('esquema de fraude') ||
+    normTitle.includes('trafico de drogas') ||
+    normTitle.includes('faccao criminosa') ||
+    (normTitle.includes('russell brand') && (normTitle.includes('culpado') || normTitle.includes('estupro')))
+  ) {
+    return { category: 'crime', confidence: 15, detectedReason: 'Hard title rule: Crime & Law Enforcement' };
+  }
+
+  // 1.2 ECONOMICS HARD RULES: Selic, Copom, Banco Central, Inflation, Stock Exchange, Forex, Fiscal
+  if (
+    normTitle.includes('selic') ||
+    normTitle.includes('taxa selic') ||
+    normTitle.includes('copom') ||
+    normTitle.includes('banco central') ||
+    normTitle.includes('inflacao') ||
+    normTitle.includes('ipca') ||
+    normTitle.includes('pib') ||
+    normTitle.includes('taxa de juros') ||
+    normTitle.includes('divida publica') ||
+    normTitle.includes('pacote fiscal') ||
+    normTitle.includes('corte de gastos') ||
+    normTitle.includes('arcabouco fiscal') ||
+    normTitle.includes('ibovespa') ||
+    normTitle.includes('bolsa de valores') ||
+    normTitle.includes('wall street') ||
+    normTitle.includes('dolar') ||
+    normTitle.includes('cambio') ||
+    normTitle.includes('ueno bank') ||
+    normTitle.includes('insurtech') ||
+    normTitle.includes('andre lara resende') ||
+    (normTitle.includes('receita') && normTitle.includes('bilhoes')) ||
+    (normTitle.includes('lucro liquido') && !normTitle.includes('futebol'))
+  ) {
+    return { category: 'economics', confidence: 15, detectedReason: 'Hard title rule: Economics & Financial Markets' };
+  }
+
+  // 1.3 SPORTS HARD RULES: Clubs, athletes, matches, cups, tournaments
+  if (
+    normTitle.includes('futebol') ||
+    normTitle.includes('brasileirao') ||
+    normTitle.includes('libertadores') ||
+    normTitle.includes('champions league') ||
+    normTitle.includes('premier league') ||
+    normTitle.includes('copa do mundo') ||
+    normTitle.includes('formula 1') ||
+    normTitle.includes('f1') ||
+    normTitle.includes('nba') ||
+    normTitle.includes('ufc') ||
+    normTitle.includes('atletismo') ||
+    normTitle.includes('mundial indoor') ||
+    normTitle.includes('olimpiadas') ||
+    normTitle.includes('cristiano ronaldo') ||
+    normTitle.includes('messi') ||
+    normTitle.includes('neymar') ||
+    normTitle.includes('flamengo') ||
+    normTitle.includes('palmeiras') ||
+    normTitle.includes('corinthians') ||
+    normTitle.includes('cruzeiro') ||
+    normTitle.includes('real madrid') ||
+    normTitle.includes('barcelona') ||
+    normTitle.includes('warriors') ||
+    normTitle.includes('chase center') ||
+    normTitle.includes('duplantis') ||
+    normTitle.includes('sheilla castro') ||
+    normTitle.includes('pierre sage') ||
+    normTitle.includes('crystal palace') ||
+    normTitle.includes('trabzonspor') ||
+    normTitle.includes('freiburg') ||
+    normTitle.includes('goleada')
+  ) {
+    return { category: 'sports', confidence: 15, detectedReason: 'Hard title rule: Sports' };
+  }
+
+  // 1.4 VIDEOGAMES HARD RULES: Consoles, game franchises, gaming engines
+  if (
+    normTitle.includes('playstation') ||
+    normTitle.includes('ps5') ||
+    normTitle.includes('ps4') ||
+    normTitle.includes('xbox') ||
+    normTitle.includes('nintendo') ||
+    normTitle.includes('switch') ||
+    normTitle.includes('gta') ||
+    normTitle.includes('grand theft auto') ||
+    normTitle.includes('zelda') ||
+    normTitle.includes('videogame') ||
+    normTitle.includes('videogames') ||
+    normTitle.includes('minigames') ||
+    normTitle.includes('minigame') ||
+    normTitle.includes('game pass') ||
+    normTitle.includes('steam') ||
+    normTitle.includes('esports') ||
+    normTitle.includes('npcs cognitivos') ||
+    normTitle.includes('renderizacao neural')
+  ) {
+    return { category: 'videogames', confidence: 15, detectedReason: 'Hard title rule: Videogames' };
+  }
+
+  // 1.5 SCIENCE HARD RULES: Astronomy, NASA, space, biology, scientific discoveries
+  if (
+    normTitle.includes('james webb') ||
+    normTitle.includes('telescopio') ||
+    normTitle.includes('nasa') ||
+    normTitle.includes('spacex') ||
+    normTitle.includes('astronomia') ||
+    normTitle.includes('exoplaneta') ||
+    normTitle.includes('mulheres na ciencia') ||
+    normTitle.includes('mulheres cientistas') ||
+    normTitle.includes('descoberta cientifica') ||
+    normTitle.includes('descobertas cientificas') ||
+    normTitle.includes('pesquisa cientifica') ||
+    normTitle.includes('nancy grace roman') ||
+    normTitle.includes('plumas de europa') ||
+    normTitle.includes('encelado')
+  ) {
+    return { category: 'science', confidence: 15, detectedReason: 'Hard title rule: Science & Astronomy' };
+  }
+
+  // 1.6 ENTERTAINMENT HARD RULES: Movies, series, awards, music, celebrities
+  if (
+    normTitle.includes('cinema') ||
+    normTitle.includes('filme') ||
+    normTitle.includes('oscar') ||
+    normTitle.includes('emmy') ||
+    normTitle.includes('grammy') ||
+    normTitle.includes('ccxp') ||
+    normTitle.includes('hollywood') ||
+    normTitle.includes('vingadores') ||
+    normTitle.includes('stallone') ||
+    normTitle.includes('samuel l jackson') ||
+    normTitle.includes('novela') ||
+    normTitle.includes('ana maria braga') ||
+    normTitle.includes('luiz bacci') ||
+    normTitle.includes('luciano huck') ||
+    normTitle.includes('anitta') ||
+    normTitle.includes('quem ama cuida')
+  ) {
+    return { category: 'entertainment', confidence: 15, detectedReason: 'Hard title rule: Entertainment' };
+  }
+
+  // 1.7 POLITICS HARD RULES: Elections, Congress, Supreme Court, Diplomacy
+  if (
+    normTitle.includes('eleicoes') ||
+    normTitle.includes('eleicao') ||
+    normTitle.includes('urnas') ||
+    normTitle.includes('stf') ||
+    normTitle.includes('congresso nacional') ||
+    normTitle.includes('senado') ||
+    normTitle.includes('camara dos deputados') ||
+    normTitle.includes('mercosul') ||
+    normTitle.includes('cupula do mercosul') ||
+    normTitle.includes('segundo turno') ||
+    normTitle.includes('midterms') ||
+    normTitle.includes('obama') ||
+    (normTitle.includes('trump') && !normTitle.includes('jogo')) ||
+    (normTitle.includes('lula') && !normTitle.includes('selic') && !normTitle.includes('juros'))
+  ) {
+    return { category: 'politics', confidence: 15, detectedReason: 'Hard title rule: Politics' };
+  }
+
+  // STEP 2: WEIGHTED MULTI-FIELD SCORING (Title 4.0x, Summary 2.0x, Content Excerpt 0.3x)
   const scores: Record<string, number> = {
     politics: 0,
     sports: 0,
@@ -173,21 +365,35 @@ export function classifyStoryCategory(params: {
       const normKw = normalizeText(kw);
       if (normKw.length < 3) continue;
 
-      // Exact word boundary matching for high accuracy
       const regex = new RegExp(`\\b${normKw}\\b`, 'g');
-      const matches = fullText.match(regex);
-      if (matches) {
-        scores[cat] += matches.length * rule.weight * (normKw.includes(' ') ? 2.5 : 1.2);
+      const isCompound = normKw.includes(' ');
+      const baseWeight = isCompound ? 2.5 : 1.0;
+
+      // Title match (heavy 4.0 multiplier)
+      const titleMatches = normTitle.match(regex);
+      if (titleMatches) {
+        scores[cat] += titleMatches.length * rule.weight * baseWeight * 4.0;
+      }
+
+      // Summary match (2.0 multiplier)
+      const summaryMatches = normSummary.match(regex);
+      if (summaryMatches) {
+        scores[cat] += summaryMatches.length * rule.weight * baseWeight * 2.0;
+      }
+
+      // Content excerpt match (low 0.3 multiplier to avoid peripheral text hijacking)
+      const contentMatches = normContent.match(regex);
+      if (contentMatches) {
+        scores[cat] += contentMatches.length * rule.weight * baseWeight * 0.3;
       }
     }
   }
 
-  // Boost hintCategory slightly if it is a valid core category and already has some relevant signal
-  if (hintCategory && scores[hintCategory] !== undefined && scores[hintCategory] > 0) {
-    scores[hintCategory] *= 1.3;
+  // Boost hintCategory slightly if it already has supporting signal
+  if (hintCategory && scores[hintCategory] !== undefined && scores[hintCategory] > 1.5) {
+    scores[hintCategory] *= 1.25;
   }
 
-  // Find top scoring category
   let topCategory = 'technology';
   let topScore = 0;
   for (const [cat, score] of Object.entries(scores)) {
@@ -197,108 +403,7 @@ export function classifyStoryCategory(params: {
     }
   }
 
-  // STRICT DOMAIN SAFEGUARDS:
-  const isHardSports =
-    fullText.includes('cristiano ronaldo') ||
-    fullText.includes('neymar') ||
-    fullText.includes('messi') ||
-    fullText.includes('futebol') ||
-    fullText.includes('formula 1') ||
-    fullText.includes('fórmula 1') ||
-    fullText.includes('nba') ||
-    fullText.includes('ufc') ||
-    fullText.includes('libertadores') ||
-    fullText.includes('champions league') ||
-    fullText.includes('champions') ||
-    fullText.includes('volei') ||
-    fullText.includes('atletismo');
-
-  const isHardEconomics =
-    fullText.includes('selic') ||
-    fullText.includes('taxa selic') ||
-    fullText.includes('copom') ||
-    fullText.includes('inflacao') ||
-    fullText.includes('inflação') ||
-    fullText.includes('banco central') ||
-    fullText.includes('ueno bank') ||
-    fullText.includes('divida publica') ||
-    fullText.includes('dívida pública') ||
-    fullText.includes('mercado financeiro') ||
-    fullText.includes('ibovespa') ||
-    fullText.includes('bolsa de valores') ||
-    fullText.includes('insurtech');
-
-  const isHardEntertainment =
-    fullText.includes('novela') ||
-    fullText.includes('novela das nove') ||
-    fullText.includes('anitta') ||
-    fullText.includes('luiz bacci') ||
-    fullText.includes('ana maria braga') ||
-    fullText.includes('luciano huck') ||
-    fullText.includes('ccxp') ||
-    fullText.includes('oscar') ||
-    fullText.includes('hollywood') ||
-    fullText.includes('filme') ||
-    fullText.includes('streaming');
-
-  const isHardVideogames =
-    fullText.includes('playstation') ||
-    fullText.includes('xbox') ||
-    fullText.includes('nintendo') ||
-    fullText.includes('gta') ||
-    fullText.includes('grand theft auto') ||
-    fullText.includes('videogame') ||
-    fullText.includes('videogames');
-
-  const isHardScience =
-    fullText.includes('james webb') ||
-    fullText.includes('telescopio') ||
-    fullText.includes('telescópio') ||
-    fullText.includes('nasa') ||
-    fullText.includes('astronomia') ||
-    fullText.includes('exoplaneta') ||
-    fullText.includes('mulheres na ciencia') ||
-    fullText.includes('mulheres na ciência');
-
-  const isHardPolitics =
-    fullText.includes('lula') ||
-    fullText.includes('bolsonaro') ||
-    fullText.includes('trump') ||
-    fullText.includes('mercosul') ||
-    fullText.includes('stf') ||
-    fullText.includes('congresso nacional') ||
-    fullText.includes('eleicoes 2026') ||
-    fullText.includes('eleições 2026') ||
-    fullText.includes('segundo turno') ||
-    fullText.includes('senado') ||
-    fullText.includes('câmara dos deputados');
-
-  if (isHardSports && !isHardPolitics) {
-    topCategory = 'sports';
-    topScore = Math.max(topScore, 10);
-  } else if (isHardEconomics && !isHardPolitics) {
-    topCategory = 'economics';
-    topScore = Math.max(topScore, 10);
-  } else if (isHardEntertainment) {
-    topCategory = 'entertainment';
-    topScore = Math.max(topScore, 10);
-  } else if (isHardVideogames) {
-    topCategory = 'videogames';
-    topScore = Math.max(topScore, 10);
-  } else if (isHardScience) {
-    topCategory = 'science';
-    topScore = Math.max(topScore, 10);
-  } else if (isHardPolitics && !isHardSports) {
-    topCategory = 'politics';
-    topScore = Math.max(topScore, 10);
-  }
-
-  // 1. If hintCategory was 'sports', but sports score is 0 and politics/economics score is far higher:
-  if (hintCategory === 'sports' && !isHardSports && (scores.politics > 3 || scores.economics > 3)) {
-    topCategory = scores.politics >= scores.economics ? 'politics' : 'economics';
-  }
-
-  // 3. Fallback to hintCategory if no dominant keywords matched
+  // Fallback to hintCategory if no dominant keywords matched
   if (topScore === 0 && hintCategory && hintCategory !== 'popular' && hintCategory !== 'last_24h') {
     topCategory = hintCategory;
   }
