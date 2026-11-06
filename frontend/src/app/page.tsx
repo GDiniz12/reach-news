@@ -11,6 +11,8 @@ import {
   UserProfile,
 } from '@/lib/types';
 import { DiscoverHeroStory, StoryCard } from '@/components/StoryCard';
+import SportsHub from '@/components/SportsHub';
+import FinanceHub from '@/components/FinanceHub';
 import { AuthModal, InterestsModal } from '@/components/Modals';
 import { FloatingAiBot } from '@/components/FloatingAiBot';
 import { BrandLogo } from '@/components/BrandLogo';
@@ -747,6 +749,14 @@ export default function ReachNewsHomePage() {
                 {lang === 'pt' ? 'Limpar Pesquisa' : 'Clear Search'}
               </button>
             </div>
+          )}
+
+          {selectedCategory === 'sports' && !viewingSavedOnly && !activeSearchTerm && (
+            <SportsHub subtheme={selectedSubtheme} />
+          )}
+
+          {selectedCategory === 'economics' && !viewingSavedOnly && !activeSearchTerm && (
+            <FinanceHub subtheme={selectedSubtheme} />
           )}
 
           {loadingStories ? (

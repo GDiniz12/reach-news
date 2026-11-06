@@ -6,6 +6,10 @@ import cors from 'cors';
 import cron from 'node-cron';
 import authRoutes from './routes/authRoutes';
 import storyRoutes from './routes/storyRoutes';
+import sportsRoutes from './routes/sportsRoutes';
+import financeRoutes from './routes/financeRoutes';
+import { refreshSportsSnapshot } from './services/sportsService';
+import { refreshFinanceSnapshot } from './services/financeService';
 import { ensureSeededStories } from './services/seedService';
 import {
   getSystemConfig,
@@ -26,7 +30,19 @@ app.get(['/api/health', '/reach/api/health'], (_req, res) => {
 });
 
 app.use(['/api/auth', '/reach/api/auth'], authRoutes);
+app.use(['/api', '/reach/api'], sportsRoutes);
+app.use(['/api', '/reach/api'], financeRoutes);
 app.use(['/api', '/reach/api'], storyRoutes);
+
+// Sports hub: refresh scores/standings every minute (ESPN structured data + AI highlights)
+cron.schedule('* * * * *', () => {
+  void refreshSportsSnapshot();
+});
+
+// Finance hub: refresh financial market data every 2 minutes
+cron.schedule('*/2 * * * *', () => {
+  void refreshFinanceSnapshot();
+});
 
 // Background Scheduler: Runs every 30 minutes ('*/30 * * * *')
 // 1. Deletes stories older than 7 days (1 week)
@@ -53,6 +69,8 @@ async function bootstrap() {
 
     // 2. Perform background startup tasks (config, seed, duplicates check) asynchronously
     await getSystemConfig();
+    void refreshSportsSnapshot(); // aquece o cache esportivo logo na inicialização
+    void refreshFinanceSnapshot(); // aquece o cache financeiro logo na inicialização
     await purgeExpiredStories(7);
     await ensureSeededStories();
     await cleanExistingDuplicateStories();

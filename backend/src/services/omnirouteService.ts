@@ -173,7 +173,7 @@ function slugify(text: string): string {
 /**
  * Helper to call OmniRoute trying the configured model first, then falling back to 'auto/best-chat' or 'auto/pro-chat'
  */
-async function callOmniRouteCompletion(
+export async function callOmniRouteCompletion(
   client: OpenAI,
   preferredModel: string,
   messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
