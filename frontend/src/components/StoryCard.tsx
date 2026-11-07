@@ -9,7 +9,11 @@ import {
   formatCardPublishedAt,
   formatExactDateTime,
 } from '@/lib/dateUtils';
-import { resolveImageCredit } from '@/lib/imageUtils';
+import {
+  resolveImageCredit,
+  getSafeStoryImageUrl,
+  getFallbackStoryImage,
+} from '@/lib/imageUtils';
 
 const BADGE_COLORS = [
   'bg-[#1e6091] text-white',
@@ -98,7 +102,8 @@ export function DiscoverHeroStory({
   const title = lang === 'pt' ? story.titlePt : story.titleEn;
   const summary = lang === 'pt' ? story.summaryPt : story.summaryEn;
   const href = `/story/${encodeURIComponent(story.slug || story.id)}?lang=${lang}`;
-  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
+  const safeImageUrl = getSafeStoryImageUrl(story.imageUrl, story.category, story.id || story.slug);
+  const imageCredit = resolveImageCredit(safeImageUrl, story.sources, lang);
 
   return (
     <div className="group py-4 sm:py-6">
@@ -186,8 +191,14 @@ export function DiscoverHeroStory({
             className="block relative overflow-hidden rounded-[18px] bg-[#202222] aspect-[16/10] border border-white/[0.06] shadow-lg"
           >
             <img
-              src={story.imageUrl}
+              src={safeImageUrl}
               alt={title}
+              onError={(e) => {
+                const fallback = getFallbackStoryImage(story.category, story.id || story.slug);
+                if (e.currentTarget.src !== fallback) {
+                  e.currentTarget.src = fallback;
+                }
+              }}
               className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
             />
           </Link>
@@ -225,7 +236,8 @@ export function StoryCard({ story, lang, isSaved, onToggleSave }: StoryCardProps
   const title = lang === 'pt' ? story.titlePt : story.titleEn;
   const summary = lang === 'pt' ? story.summaryPt : story.summaryEn;
   const href = `/story/${encodeURIComponent(story.slug || story.id)}?lang=${lang}`;
-  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
+  const safeImageUrl = getSafeStoryImageUrl(story.imageUrl, story.category, story.id || story.slug);
+  const imageCredit = resolveImageCredit(safeImageUrl, story.sources, lang);
 
   return (
     <div
@@ -237,8 +249,14 @@ export function StoryCard({ story, lang, isSaved, onToggleSave }: StoryCardProps
     >
       <Link href={href} className="block relative aspect-[16/10] w-full overflow-hidden bg-[#161717]">
         <img
-          src={story.imageUrl}
+          src={safeImageUrl}
           alt={title}
+          onError={(e) => {
+            const fallback = getFallbackStoryImage(story.category, story.id || story.slug);
+            if (e.currentTarget.src !== fallback) {
+              e.currentTarget.src = fallback;
+            }
+          }}
           className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
         />
         {story.isJustGenerated && (

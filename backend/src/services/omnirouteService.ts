@@ -4,6 +4,8 @@ import {
   searchWebNews,
   fetchUrlContent,
   resolveTopicImage,
+  normalizeImageUrlForComparison,
+  isLowQualityOrPlaceholderImage,
   fetchTrendingTopics,
   fetchDistinctCategoryTopics,
   fetch24hBreakingTopics,
@@ -335,8 +337,18 @@ export async function researchAndSynthesizeStory(params: {
     }
   }
 
-  // 3. Resolve real photograph matching the exact topic
-  const resolvedImageUrl = await resolveTopicImage(collectedItems, category);
+  // Load recent story headlines and used image URLs from PostgreSQL to prevent duplicate stories AND duplicate images
+  const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // Check against all active stories within 7 days
+  const recentStories = await prisma.story.findMany({
+    where: { publishedAt: { gte: recentCutoff } },
+    select: { titlePt: true, imageUrl: true },
+    take: 150,
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  const usedImageUrls = recentStories
+    .map((s) => s.imageUrl)
+    .filter((u): u is string => Boolean(u && u.trim().length > 0));
 
   const sourcesContext = JSON.stringify(
     collectedItems.slice(0, 12).map((i) => ({
@@ -350,15 +362,6 @@ export async function researchAndSynthesizeStory(params: {
   );
 
   const excerptsText = deepExcerpts.join('\n\n====================\n\n');
-
-  // Load recent story headlines from PostgreSQL to instruct the AI not to duplicate existing coverage
-  const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // Check against all active stories within 7 days
-  const recentStories = await prisma.story.findMany({
-    where: { publishedAt: { gte: recentCutoff } },
-    select: { titlePt: true },
-    take: 80,
-    orderBy: { publishedAt: 'desc' },
-  });
 
   const currentDateFormatted = new Date().toLocaleDateString('pt-BR', {
     timeZone: 'America/Sao_Paulo',
@@ -505,6 +508,13 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
     });
     const finalCategory = classification.category;
 
+    // 3. Resolve real photograph matching the exact synthesized headline & final category, preventing reuse of existing images
+    const resolvedImageUrl = await resolveTopicImage(collectedItems, finalCategory, {
+      targetHeadline: parsed.titlePt || query,
+      query,
+      usedImageUrls,
+    });
+
     const cleanTagPt = cleanAndStandardizeTopicTag({
       rawTag: parsed.topicTagPt || query.slice(0, 28),
       title: parsed.titlePt || query,
@@ -519,7 +529,7 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
       lang: 'en',
     });
 
-    const uniqueSources = deduplicateSources(collectedItems, query);
+    const uniqueSources = deduplicateSources(collectedItems, query, parsed.titlePt);
 
     // Compute exact publication date from the latest collected source, or current timestamp
     let latestPubDate: string = new Date().toISOString();
@@ -560,19 +570,24 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) com este formato exato:
     };
   } catch (err) {
     console.warn(`[OmniRoute] Synthesis fallback triggered for "${query}":`, (err as Error).message);
+    const fallbackImageUrl = await resolveTopicImage(collectedItems, category, {
+      targetHeadline: primaryItems[0]?.title || query,
+      query,
+      usedImageUrls,
+    });
     return buildIntelligentSynthesisFromSources(
       query,
       category,
       primaryItems,
       secondaryItems,
       deepExcerpts,
-      resolvedImageUrl,
+      fallbackImageUrl,
       isRadar
     );
   }
 }
 
-function deduplicateSources(items: RawNewsItem[], fallbackQuery: string) {
+function deduplicateSources(items: RawNewsItem[], fallbackQuery: string, targetHeadline?: string) {
   const seen = new Set<string>();
   const result: Array<{
     name: string;
@@ -583,7 +598,32 @@ function deduplicateSources(items: RawNewsItem[], fallbackQuery: string) {
     snippet?: string;
   }> = [];
 
-  for (const item of items) {
+  // Sort items so the most relevant source to the synthesized headline comes first (ensuring accurate photo/source attribution)
+  let orderedItems = items;
+  if (targetHeadline && targetHeadline.trim().length > 5) {
+    const refWords = targetHeadline
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .split(/\W+/)
+      .filter((w) => w.length > 3);
+
+    orderedItems = [...items].sort((a, b) => {
+      const aNorm = a.title
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      const bNorm = b.title
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      const aHits = refWords.filter((w) => aNorm.includes(w)).length;
+      const bHits = refWords.filter((w) => bNorm.includes(w)).length;
+      return bHits - aHits;
+    });
+  }
+
+  for (const item of orderedItems) {
     const key = item.title.toLowerCase().slice(0, 40);
     if (!seen.has(key) && item.url) {
       seen.add(key);
@@ -908,6 +948,33 @@ export async function saveSynthesizedStoryIfUnique(
   });
   generated.category = finalCategoryCheck.category;
 
+  // Final image deduplication & quality check right before saving (prevents race-condition duplicates across parallel angles)
+  const existingImageNorms = new Set(
+    recentStories
+      .map((s) => normalizeImageUrlForComparison(s.imageUrl))
+      .filter(Boolean)
+  );
+  const currentImgNorm = normalizeImageUrlForComparison(generated.imageUrl);
+  if (
+    !generated.imageUrl ||
+    isLowQualityOrPlaceholderImage(generated.imageUrl) ||
+    (currentImgNorm && existingImageNorms.has(currentImgNorm))
+  ) {
+    const rawItemsFromSources: RawNewsItem[] = (generated.sources || []).map((s) => ({
+      title: s.title,
+      url: s.url,
+      sourceName: s.name,
+      domain: s.domain,
+      publishedAt: s.publishedAt || new Date().toISOString(),
+      snippet: s.snippet || s.title,
+    }));
+    generated.imageUrl = await resolveTopicImage(rawItemsFromSources, generated.category, {
+      targetHeadline: generated.titlePt,
+      query: generated.radarQuery || generated.titlePt,
+      usedImageUrls: recentStories.map((s) => s.imageUrl).filter(Boolean),
+    });
+  }
+
   const storyPublishedAt = generated.publishedAt
     ? new Date(generated.publishedAt)
     : new Date();
@@ -1191,4 +1258,84 @@ Retorne APENAS um JSON válido (sem markdown \`\`\`json) no formato:
     angles: distinctFromRss.slice(0, 3),
   };
 }
+
+/**
+ * Scans all active stories in PostgreSQL to repair:
+ * 1. Broken/placeholder/logo images (e.g. static/placeholder.png, Backup-Capa, etc.)
+ * 2. Duplicate images shared across multiple stories
+ * 3. Category-mismatched Unsplash fallback images (e.g. a technology Unsplash image on an economics story)
+ */
+export async function repairExistingStoryImages(): Promise<{
+  scanned: number;
+  repaired: number;
+}> {
+  const stories = await prisma.story.findMany({
+    include: { sources: true },
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  const usedImageNorms = new Set<string>();
+  const usedRawUrls: string[] = [];
+  let repaired = 0;
+
+  for (const story of stories) {
+    const img = story.imageUrl || '';
+    const norm = normalizeImageUrlForComparison(img);
+    const isLowQuality = isLowQualityOrPlaceholderImage(img);
+    const isDuplicate = norm.length > 0 && usedImageNorms.has(norm);
+
+    // Check if an Unsplash image from another category was assigned before classification
+    let isMismatchedUnsplash = false;
+    if (img.includes('images.unsplash.com')) {
+      // Check if it's the generic tech microchip photo used on a non-tech story
+      if (img.includes('photo-1518770660439-4636190af475') && story.category !== 'technology') {
+        isMismatchedUnsplash = true;
+      }
+      if (img.includes('photo-1541872703-74c5e44368f9') && story.category !== 'politics') {
+        isMismatchedUnsplash = true;
+      }
+    }
+
+    if (isLowQuality || isDuplicate || isMismatchedUnsplash) {
+      const rawItems: RawNewsItem[] = (story.sources || []).map((s) => ({
+        title: s.title,
+        url: s.url,
+        sourceName: s.name,
+        domain: s.domain,
+        publishedAt: s.publishedAt || story.publishedAt.toISOString(),
+        snippet: s.snippet || s.title,
+      }));
+
+      const newImageUrl = await resolveTopicImage(rawItems, story.category, {
+        targetHeadline: story.titlePt,
+        query: story.radarQuery || story.titlePt,
+        usedImageUrls: usedRawUrls,
+      });
+
+      if (newImageUrl && newImageUrl !== img) {
+        await prisma.story.update({
+          where: { id: story.id },
+          data: { imageUrl: newImageUrl },
+        });
+        const newNorm = normalizeImageUrlForComparison(newImageUrl);
+        if (newNorm) usedImageNorms.add(newNorm);
+        usedRawUrls.push(newImageUrl);
+        repaired++;
+        console.log(
+          `[ImageRepair] Repaired image for "${story.titlePt.slice(0, 55)}..." -> ${newImageUrl.slice(0, 80)}`
+        );
+        continue;
+      }
+    }
+
+    if (norm) usedImageNorms.add(norm);
+    if (img) usedRawUrls.push(img);
+  }
+
+  if (repaired > 0) {
+    console.log(`[ImageRepair] Scanned ${stories.length} stories and repaired ${repaired} images.`);
+  }
+  return { scanned: stories.length, repaired };
+}
+
 

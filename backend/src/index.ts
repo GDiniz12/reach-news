@@ -17,6 +17,7 @@ import {
   runHourlyEditorialCycle,
   cleanExistingDuplicateStories,
   reclassifyAllExistingStories,
+  repairExistingStoryImages,
 } from './services/omnirouteService';
 
 const app = express();
@@ -75,6 +76,7 @@ async function bootstrap() {
     await ensureSeededStories();
     await cleanExistingDuplicateStories();
     await reclassifyAllExistingStories();
+    await repairExistingStoryImages();
   } catch (err) {
     console.error('Failed to initialize background bootstrap tasks:', err);
   }

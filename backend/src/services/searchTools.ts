@@ -321,8 +321,63 @@ export async function fetchUrlContent(url: string): Promise<{
       '';
     let imageUrl =
       $('meta[property="og:image"]').attr('content') ||
+      $('meta[property="og:image:secure_url"]').attr('content') ||
       $('meta[name="twitter:image"]').attr('content') ||
+      $('meta[name="twitter:image:src"]').attr('content') ||
+      $('link[rel="image_src"]').attr('href') ||
       undefined;
+
+    // Fallback to JSON-LD NewsArticle image if meta tags are missing or generic
+    if (!imageUrl || isLowQualityOrPlaceholderImage(imageUrl)) {
+      $('script[type="application/ld+json"]').each((_, el) => {
+        if (imageUrl && !isLowQualityOrPlaceholderImage(imageUrl)) return;
+        try {
+          const rawJson = $(el).html();
+          if (!rawJson) return;
+          const parsed = JSON.parse(rawJson);
+          const nodes = Array.isArray(parsed)
+            ? parsed
+            : parsed?.['@graph'] && Array.isArray(parsed['@graph'])
+            ? parsed['@graph']
+            : [parsed];
+          for (const node of nodes) {
+            const nodeType = String(node?.['@type'] || '').toLowerCase();
+            // Never extract images from Person, Author, Organization, or WebSite nodes (avoids author avatars/logos!)
+            if (
+              nodeType.includes('person') ||
+              nodeType.includes('organization') ||
+              nodeType.includes('website') ||
+              nodeType.includes('imageobject')
+            ) {
+              continue;
+            }
+            const imgField = node?.image || node?.thumbnailUrl;
+            if (!imgField) continue;
+            if (typeof imgField === 'string' && imgField.startsWith('http')) {
+              if (!isLowQualityOrPlaceholderImage(imgField)) {
+                imageUrl = imgField;
+                break;
+              }
+            } else if (Array.isArray(imgField)) {
+              const firstValid = imgField
+                .map((x: any) => (typeof x === 'string' ? x : x?.url))
+                .find((u: any) => typeof u === 'string' && u.startsWith('http') && !isLowQualityOrPlaceholderImage(u));
+              if (firstValid) {
+                imageUrl = firstValid;
+                break;
+              }
+            } else if (typeof imgField === 'object' && typeof imgField.url === 'string') {
+              if (!isLowQualityOrPlaceholderImage(imgField.url)) {
+                imageUrl = imgField.url;
+                break;
+              }
+            }
+          }
+        } catch {
+          // ignore malformed JSON-LD
+        }
+      });
+    }
 
     if (imageUrl && imageUrl.startsWith('//')) {
       imageUrl = 'https:' + imageUrl;
@@ -352,63 +407,347 @@ export async function fetchUrlContent(url: string): Promise<{
 }
 
 /**
- * Finds the best real photograph for a topic from the collected news items or scrapes og:image from the top URLs
+ * Normalizes an image URL so we can accurately detect duplicates even when CDNs
+ * attach different resize/crop/timestamp query parameters.
  */
-export async function resolveTopicImage(items: RawNewsItem[], fallbackCategory: string): Promise<string> {
-  // 1. Try scraping og:image from the top 3 real article URLs first (highest resolution original journalism photo)
-  for (const item of items.slice(0, 3)) {
-    if (item.url && !item.url.includes('news.google.com')) {
-      const scraped = await fetchUrlContent(item.url);
-      if (
-        scraped.imageUrl &&
-        scraped.imageUrl.startsWith('http') &&
-        !scraped.imageUrl.includes('logo') &&
-        !scraped.imageUrl.includes('favicon')
-      ) {
-        return scraped.imageUrl;
+export function normalizeImageUrlForComparison(url: string | undefined | null): string {
+  if (!url) return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+
+    // Bing News thumbnails identify the image via the `id` query param
+    if (host.includes('bing.com') && parsed.pathname.includes('/th')) {
+      const bingId = parsed.searchParams.get('id');
+      if (bingId) return `bing:${bingId}`;
+    }
+
+    // Globo / Thumbor URLs embed the original S3 path at the end
+    const internalIdx = trimmed.indexOf('/internal_photos/');
+    if (internalIdx !== -1) {
+      return `glb:${trimmed.slice(internalIdx).split('?')[0].toLowerCase()}`;
+    }
+
+    // General normalization: strip resize/quality query params
+    return `${host}${parsed.pathname.toLowerCase().replace(/\/+$/, '')}`;
+  } catch {
+    return trimmed.split('?')[0].toLowerCase();
+  }
+}
+
+/**
+ * Detects generic placeholders, site logos, avatars, social share banners, or broken patterns
+ * that must never be selected as a reportage cover photo.
+ */
+export function isLowQualityOrPlaceholderImage(url: string | undefined | null): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return true;
+
+  const lower = trimmed.toLowerCase();
+
+  const badSubstrings = [
+    'placeholder',
+    'default-image',
+    'default_image',
+    'default-share',
+    'default_share',
+    'no-image',
+    'no_image',
+    'noimage',
+    'sem-foto',
+    'sem_foto',
+    'favicon',
+    'apple-touch-icon',
+    'site-logo',
+    'logo-default',
+    'logo_default',
+    'share-default',
+    'og-default',
+    'og_default',
+    'fallback',
+    'backup-capa',
+    'gravatar.com',
+    '/avatar/',
+    'avatar-default',
+    'blank.',
+    '1x1',
+    'pixel.',
+    'spacer.',
+    '/static/placeholder',
+    'google.com/images/branding',
+    'gstatic.com',
+    'lh3.googleusercontent.com/J6_coFbogxhRI9iM864NL_liGXvsQp2AupsKei7z0cNNfDvGUmWUy20nuUhkREQyrpY4bEeIBuc',
+  ];
+
+  for (const pat of badSubstrings) {
+    if (lower.includes(pat)) return true;
+  }
+
+  // Reject SVG or ICO files which are almost always vector logos/icons
+  const pathOnly = lower.split('?')[0];
+  if (pathOnly.endsWith('.svg') || pathOnly.endsWith('.ico') || pathOnly.endsWith('.gif')) {
+    return true;
+  }
+
+  // Reject URLs where a path segment is literally "logo" or "logos" or "icons"
+  if (/\/(logo|logos|icon|icons|brand|branding|avatars)\b/i.test(pathOnly)) {
+    return true;
+  }
+
+  // Reject tiny explicit dimensions in URL (e.g. 150x150, 300x150, 430x323 small thumbs when better exists)
+  const dimMatch = lower.match(/[/_-](\d{2,4})x(\d{2,4})(?=[._/-]|$)/);
+  if (dimMatch) {
+    const w = parseInt(dimMatch[1], 10);
+    const h = parseInt(dimMatch[2], 10);
+    if ((w > 0 && w < 360) || (h > 0 && h < 200)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+const CATEGORY_IMAGE_POOLS: Record<string, string[]> = {
+  sports: [
+    'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=1200&q=85',
+  ],
+  football: [
+    'https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1200&q=85',
+  ],
+  motorsport: [
+    'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1541447271487-09612b3f49f7?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1200&q=85',
+  ],
+  technology: [
+    'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1591799264318-7e6ef8ddb7ea?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?auto=format&fit=crop&w=1200&q=85',
+  ],
+  artificial_intelligence: [
+    'https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1655720828018-edd2daec9349?auto=format&fit=crop&w=1200&q=85',
+  ],
+  science: [
+    'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1507413245164-6160d8298b31?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1614728894747-a83421e2b9c9?auto=format&fit=crop&w=1200&q=85',
+  ],
+  politics: [
+    'https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1555848962-6e79363ec58f?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1575320181282-9afab399332c?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?auto=format&fit=crop&w=1200&q=85',
+  ],
+  economics: [
+    'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1642543492481-44e81e3914a7?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=1200&q=85',
+  ],
+  entertainment: [
+    'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?auto=format&fit=crop&w=1200&q=85',
+  ],
+  videogames: [
+    'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1542751110-97427bbecf20?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1612287230202-1ff1d85d1bdf?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1552820728-8b83bb6b773f?auto=format&fit=crop&w=1200&q=85',
+  ],
+  crime: [
+    'https://images.unsplash.com/photo-1453873531674-2151bcd01707?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1505664194779-8beaceb93744?auto=format&fit=crop&w=1200&q=85',
+    'https://images.unsplash.com/photo-1568992687947-868a62a9f521?auto=format&fit=crop&w=1200&q=85',
+  ],
+};
+
+/**
+ * Finds the best real photograph for a topic from the collected news items or scrapes og:image from the top URLs.
+ * Strictly ranks candidates by semantic relevance to the synthesized headline/query and prevents reusing images
+ * already assigned to other stories in the database.
+ */
+export async function resolveTopicImage(
+  items: RawNewsItem[],
+  fallbackCategory: string,
+  options?: {
+    targetHeadline?: string;
+    query?: string;
+    usedImageUrls?: Iterable<string>;
+  }
+): Promise<string> {
+  const usedNormalized = new Set<string>();
+  if (options?.usedImageUrls) {
+    for (const u of options.usedImageUrls) {
+      const norm = normalizeImageUrlForComparison(u);
+      if (norm) usedNormalized.add(norm);
+    }
+  }
+
+  const isAlreadyUsed = (url: string): boolean => {
+    const norm = normalizeImageUrlForComparison(url);
+    return norm ? usedNormalized.has(norm) : false;
+  };
+
+  const referenceText = `${options?.targetHeadline || ''} ${options?.query || ''}`.trim();
+  const refTokens: Set<string> = referenceText
+    ? extractSignificantTokens(referenceText)
+    : new Set<string>();
+
+  // Score and sort items so we inspect the articles that most closely match the actual story headline first!
+  const scoredItems = items.map((item, idx) => {
+    let relevance = 0;
+    if (refTokens.size > 0) {
+      const itemTokens = extractSignificantTokens(`${item.title} ${item.snippet || ''}`);
+      relevance = computeTokenOverlapScore(refTokens, itemTokens);
+    }
+    const hasDirectUrl = item.url && !item.url.includes('news.google.com') ? 0.15 : 0;
+    // Slight preference for earlier items when relevance is tied
+    const positionBonus = Math.max(0, (12 - idx) * 0.01);
+    return {
+      item,
+      score: relevance + hasDirectUrl + positionBonus,
+      relevance,
+    };
+  });
+
+  scoredItems.sort((a, b) => b.score - a.score);
+
+  // 1. Try scraping og:image from the top relevant real article URLs (up to 6 candidates)
+  let bestUnusedBingImage: string | undefined;
+  let fallbackUsedRealImage: string | undefined;
+
+  const scrapeCandidates = scoredItems
+    .filter((entry) => entry.item.url && !entry.item.url.includes('news.google.com'))
+    .slice(0, 6);
+
+  for (const { item, relevance } of scrapeCandidates) {
+    // If we have a target headline and this source has 0 token overlap with it, skip scraping its photo
+    // unless we have no other relevant sources.
+    if (refTokens.size >= 3 && relevance === 0 && scrapeCandidates.some((c) => c.relevance > 0)) {
+      continue;
+    }
+
+    const scraped = await fetchUrlContent(item.url);
+    const candidateImg = scraped.imageUrl;
+
+    if (candidateImg && !isLowQualityOrPlaceholderImage(candidateImg)) {
+      // Also check if the image filename itself is a known mismatch (e.g. generic portal banner)
+      if (!isAlreadyUsed(candidateImg)) {
+        return candidateImg;
+      }
+      if (!fallbackUsedRealImage) {
+        fallbackUsedRealImage = candidateImg;
+      }
+    }
+
+    if (item.imageUrl && !isLowQualityOrPlaceholderImage(item.imageUrl)) {
+      if (!isAlreadyUsed(item.imageUrl) && !bestUnusedBingImage) {
+        bestUnusedBingImage = item.imageUrl;
       }
     }
   }
 
-  // 2. Use Bing News high-res article image if present on any item
-  const itemWithImg = items.find((i) => i.imageUrl && i.imageUrl.startsWith('http'));
-  if (itemWithImg?.imageUrl) {
-    return itemWithImg.imageUrl;
+  // 2. If direct og:image scraping didn't yield an unused photo, check Bing News high-res images on relevant items
+  if (bestUnusedBingImage) {
+    return bestUnusedBingImage;
   }
 
-  // 3. Category-specific fallback
-  const categoryMap: Record<string, string> = {
-    sports: 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1200&q=85',
-    football: 'https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1200&q=85',
-    motorsport: 'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?auto=format&fit=crop&w=1200&q=85',
-    technology: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=85',
-    artificial_intelligence: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1200&q=85',
-    startups: 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?auto=format&fit=crop&w=1200&q=85',
-    cybersecurity: 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=85',
-    hardware: 'https://images.unsplash.com/photo-1591799264318-7e6ef8ddb7ea?auto=format&fit=crop&w=1200&q=85',
-    science: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=85',
-    space: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=1200&q=85',
-    health: 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1200&q=85',
-    climate: 'https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?auto=format&fit=crop&w=1200&q=85',
-    politics: 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=1200&q=85',
-    geopolitics: 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&w=1200&q=85',
-    economics: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=85',
-    finance: 'https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?auto=format&fit=crop&w=1200&q=85',
-    crypto: 'https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=1200&q=85',
-    business: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1200&q=85',
-    entertainment: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1200&q=85',
-    music: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=1200&q=85',
-    videogames: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=85',
-    esports: 'https://images.unsplash.com/photo-1542751110-97427bbecf20?auto=format&fit=crop&w=1200&q=85',
-    crime: 'https://images.unsplash.com/photo-1453873531674-2151bcd01707?auto=format&fit=crop&w=1200&q=85',
-    automotive: 'https://images.unsplash.com/photo-1593941707882-a5bba14938c7?auto=format&fit=crop&w=1200&q=85',
-    education: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=1200&q=85',
-  };
+  for (const { item, relevance } of scoredItems) {
+    if (refTokens.size >= 3 && relevance === 0 && scoredItems.some((c) => c.relevance > 0)) {
+      continue;
+    }
+    if (item.imageUrl && !isLowQualityOrPlaceholderImage(item.imageUrl)) {
+      if (!isAlreadyUsed(item.imageUrl)) {
+        return item.imageUrl;
+      }
+      if (!fallbackUsedRealImage) {
+        fallbackUsedRealImage = item.imageUrl;
+      }
+    }
+  }
 
-  return (
-    categoryMap[fallbackCategory] ||
-    'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=1200&q=85'
-  );
+  // 3. Active Bing News Image Search by specific headline/query if all items were Google News links or lacked photos
+  const searchTopic = (options?.targetHeadline || options?.query || '').trim();
+  if (searchTopic.length > 5) {
+    try {
+      const encoded = encodeURIComponent(searchTopic.split(/\s+/).slice(0, 8).join(' '));
+      const bingImgRss = `https://www.bing.com/news/search?q=${encoded}&setlang=pt-BR&cc=BR&format=rss`;
+      const feed = await parser.parseURL(bingImgRss);
+      for (const feedItem of (feed.items || []).slice(0, 6)) {
+        const anyItem = feedItem as unknown as Record<string, string>;
+        const rawImage = anyItem.newsImage;
+        if (rawImage) {
+          const hiRes = rawImage.replace(/^http:\/\//i, 'https://') + '&w=1200&h=675&c=7&rs=1';
+          if (!isLowQualityOrPlaceholderImage(hiRes) && !isAlreadyUsed(hiRes)) {
+            return hiRes;
+          }
+        }
+        const realLink = extractRealUrlFromBing(feedItem.link || '');
+        if (realLink && !realLink.includes('news.google.com')) {
+          const scraped = await fetchUrlContent(realLink);
+          if (
+            scraped.imageUrl &&
+            !isLowQualityOrPlaceholderImage(scraped.imageUrl) &&
+            !isAlreadyUsed(scraped.imageUrl)
+          ) {
+            return scraped.imageUrl;
+          }
+        }
+      }
+    } catch {
+      // ignore fallback search errors
+    }
+  }
+
+  // 4. Category-specific diversified pool (picks an UNUSED photo from the category pool first)
+  const pool =
+    CATEGORY_IMAGE_POOLS[fallbackCategory] ||
+    CATEGORY_IMAGE_POOLS.technology;
+
+  for (const poolUrl of pool) {
+    if (!isAlreadyUsed(poolUrl)) {
+      return poolUrl;
+    }
+  }
+
+  // Deterministic hash pick based on headline so even when pool is exhausted, consecutive stories vary
+  const hashSource = referenceText || String(Date.now());
+  let hash = 0;
+  for (let i = 0; i < hashSource.length; i++) {
+    hash = (hash * 31 + hashSource.charCodeAt(i)) >>> 0;
+  }
+  return pool[hash % pool.length];
 }
 
 /**
