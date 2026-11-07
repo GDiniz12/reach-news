@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { INTEREST_CATEGORIES, Language, UI_TEXT } from '@/lib/types';
-import { seedLocalInterests } from '@/lib/telemetry';
+import { seedLocalInterests, saveAuthSession } from '@/lib/telemetry';
 import { BrandLogo } from '@/components/BrandLogo';
 import {
   Compass,
@@ -152,7 +152,7 @@ function AuthPageContent() {
       }
 
       if (data.token) {
-        localStorage.setItem('reach_news_token', data.token);
+        saveAuthSession(data.token, data.user);
       }
       if (Array.isArray(data.user?.interests)) {
         seedLocalInterests(data.user.interests);
@@ -204,7 +204,7 @@ function AuthPageContent() {
       }
 
       if (data.token) {
-        localStorage.setItem('reach_news_token', data.token);
+        saveAuthSession(data.token, data.user);
       }
       seedLocalInterests(allChosenInterests);
       router.push(redirectUrl);

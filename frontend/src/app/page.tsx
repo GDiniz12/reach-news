@@ -16,7 +16,15 @@ import FinanceHub from '@/components/FinanceHub';
 import { AuthModal, InterestsModal } from '@/components/Modals';
 import { FloatingAiBot } from '@/components/FloatingAiBot';
 import { BrandLogo } from '@/components/BrandLogo';
-import { getLocalAffinityMap, recordUserSignal } from '@/lib/telemetry';
+import {
+  getLocalAffinityMap,
+  recordUserSignal,
+  getCachedAuthSession,
+  saveAuthSession,
+  clearAuthSession,
+  syncSessionWithBackend,
+  touchAuthSession,
+} from '@/lib/telemetry';
 import {
   Compass,
   Sparkles,
@@ -169,23 +177,38 @@ export default function ReachNewsHomePage() {
       setLang(savedLang);
     }
 
-    const savedToken = localStorage.getItem('reach_news_token');
-    if (savedToken) {
-      setToken(savedToken);
-      fetch(`${API_BASE_URL}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${savedToken}` },
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.user) {
-            setUser(data.user);
-            setSelectedCategory('for_you');
-            if (Array.isArray(data.user.savedStories)) {
-              setSavedStoryIds(new Set(data.user.savedStories.map((s: Story) => s.id)));
-            }
+    // 1. Instantly hydrate cached session (<1ms) so the user appears logged in immediately upon entering the platform
+    const cached = getCachedAuthSession();
+    if (cached.token) {
+      setToken(cached.token);
+      if (cached.user) {
+        setUser(cached.user);
+        setSelectedCategory((prev) => (prev === 'popular' ? 'for_you' : prev));
+        if (Array.isArray(cached.user.savedStories)) {
+          setSavedStoryIds(new Set(cached.user.savedStories.map((s: Story) => s.id)));
+        }
+      }
+
+      // 2. Verify and renew the rolling session with backend (with automatic cold-start retry)
+      syncSessionWithBackend(API_BASE_URL).then((res) => {
+        if (res.unauthorized) {
+          setToken(null);
+          setUser(null);
+          setSavedStoryIds(new Set());
+          setSelectedCategory('popular');
+          return;
+        }
+        if (res.token) {
+          setToken(res.token);
+        }
+        if (res.user) {
+          setUser(res.user);
+          setSelectedCategory((prev) => (prev === 'popular' ? 'for_you' : prev));
+          if (Array.isArray(res.user.savedStories)) {
+            setSavedStoryIds(new Set(res.user.savedStories.map((s: Story) => s.id)));
           }
-        })
-        .catch(() => {});
+        }
+      });
     }
   }, []);
 
@@ -312,7 +335,7 @@ export default function ReachNewsHomePage() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('reach_news_token');
+    clearAuthSession();
     setToken(null);
     setUser(null);
     setSavedStoryIds(new Set());
@@ -893,9 +916,10 @@ export default function ReachNewsHomePage() {
           onClose={() => setAuthModalMode(null)}
           onSwitchMode={(m) => setAuthModalMode(m)}
           onSuccess={(newToken, newUser) => {
-            localStorage.setItem('reach_news_token', newToken);
+            saveAuthSession(newToken, newUser);
             setToken(newToken);
             setUser(newUser);
+            setSelectedCategory('for_you');
           }}
         />
       )}
@@ -909,7 +933,9 @@ export default function ReachNewsHomePage() {
           onClose={() => setShowInterestsModal(false)}
           onSaved={(newInterests, newAffinity) => {
             if (user) {
-              setUser({ ...user, interests: newInterests, affinityMap: newAffinity });
+              const updatedUser = { ...user, interests: newInterests, affinityMap: newAffinity };
+              setUser(updatedUser);
+              touchAuthSession(token || undefined, updatedUser);
             }
             if (selectedCategory === 'for_you') {
               fetchStories('for_you');

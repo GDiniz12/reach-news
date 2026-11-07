@@ -8,13 +8,22 @@ import { SourceIconsCluster } from '@/components/StoryCard';
 import { AuthModal } from '@/components/Modals';
 import { FloatingAiBot } from '@/components/FloatingAiBot';
 import { BrandLogo } from '@/components/BrandLogo';
-import { recordUserSignal } from '@/lib/telemetry';
+import {
+  recordUserSignal,
+  getCachedAuthSession,
+  saveAuthSession,
+  syncSessionWithBackend,
+} from '@/lib/telemetry';
 import {
   formatExactPublishedAt,
   formatExactDateTime,
   formatCardPublishedAt,
 } from '@/lib/dateUtils';
-import { resolveImageCredit } from '@/lib/imageUtils';
+import {
+  resolveImageCredit,
+  getSafeStoryImageUrl,
+  getFallbackStoryImage,
+} from '@/lib/imageUtils';
 import {
   ArrowLeft,
   FileText,
@@ -148,22 +157,31 @@ export default function StoryDetailPage() {
   }, [slug]);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('reach_news_token');
-    if (savedToken) {
-      setToken(savedToken);
-      fetch(`${API_BASE_URL}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${savedToken}` },
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.user) {
-            setUser(data.user);
-            if (story && Array.isArray(data.user.savedStories)) {
-              setIsSaved(data.user.savedStories.some((s: Story) => s.id === story.id));
-            }
+    const cached = getCachedAuthSession();
+    if (cached.token) {
+      setToken(cached.token);
+      if (cached.user) {
+        setUser(cached.user);
+        if (story && Array.isArray(cached.user.savedStories)) {
+          setIsSaved(cached.user.savedStories.some((s: Story) => s.id === story.id));
+        }
+      }
+
+      syncSessionWithBackend(API_BASE_URL).then((res) => {
+        if (res.unauthorized) {
+          setToken(null);
+          setUser(null);
+          setIsSaved(false);
+          return;
+        }
+        if (res.token) setToken(res.token);
+        if (res.user) {
+          setUser(res.user);
+          if (story && Array.isArray(res.user.savedStories)) {
+            setIsSaved(res.user.savedStories.some((s: Story) => s.id === story.id));
           }
-        })
-        .catch(() => {});
+        }
+      });
     }
   }, [story?.id]);
 
@@ -431,7 +449,8 @@ export default function StoryDetailPage() {
   const bullets = lang === 'pt' ? story.bulletPointsPt : story.bulletPointsEn;
   const perspectives = lang === 'pt' ? story.perspectivesPt : story.perspectivesEn;
   const fullArticle = lang === 'pt' ? story.fullArticlePt : story.fullArticleEn;
-  const imageCredit = resolveImageCredit(story.imageUrl, story.sources, lang);
+  const safeImageUrl = getSafeStoryImageUrl(story.imageUrl, story.category, story.id || story.slug);
+  const imageCredit = resolveImageCredit(safeImageUrl, story.sources, lang);
 
 
 
@@ -576,8 +595,14 @@ export default function StoryDetailPage() {
           <figure className="my-7">
             <div className="relative rounded-[18px] overflow-hidden bg-[#202222] border border-white/[0.07] aspect-[16/9]">
               <img
-                src={story.imageUrl}
+                src={safeImageUrl}
                 alt={title}
+                onError={(e) => {
+                  const fallback = getFallbackStoryImage(story.category, story.id || story.slug);
+                  if (e.currentTarget.src !== fallback) {
+                    e.currentTarget.src = fallback;
+                  }
+                }}
                 className="w-full h-full object-cover"
               />
             </div>
@@ -724,7 +749,7 @@ export default function StoryDetailPage() {
           onClose={() => setAuthModalMode(null)}
           onSwitchMode={(m) => setAuthModalMode(m)}
           onSuccess={(newToken, newUser) => {
-            localStorage.setItem('reach_news_token', newToken);
+            saveAuthSession(newToken, newUser);
             setToken(newToken);
             setUser(newUser);
           }}

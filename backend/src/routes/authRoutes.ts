@@ -142,7 +142,11 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
     }
 
     const uAny = user as any;
+    // Rolling 14-day session renewal: issue a refreshed token whenever the user actively uses the app
+    const refreshedToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '14d' });
+
     res.json({
+      token: refreshedToken,
       user: {
         id: user.id,
         name: user.name,
