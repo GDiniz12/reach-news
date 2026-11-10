@@ -21,6 +21,7 @@ import {
   cleanAndStandardizeTopicTag,
   reclassifyAllExistingStories,
 } from './categoryClassifier';
+import { getNewsUpdateIntervalMs, isAiRestPeriod } from './aiScheduleService';
 
 export { cleanExistingDuplicateStories, reclassifyAllExistingStories };
 
@@ -75,7 +76,7 @@ export async function getSystemConfig() {
         omnirouteBaseUrl: process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128/v1',
         omnirouteApiKey: process.env.OMNIROUTE_API_KEY || 'sk-omniroute-local',
         omnirouteModel: process.env.OMNIROUTE_MODEL || 'antigravity/gemini-3.8-flash-low',
-        cronIntervalMin: 30,
+        cronIntervalMin: 60,
       },
     });
   } else if (
@@ -85,13 +86,13 @@ export async function getSystemConfig() {
     config.omnirouteModel === 'antigravity/gemini-3.1-flash-lite' ||
     config.omnirouteModel === 'antigravity/gemini-2.5-flash' ||
     config.omnirouteModel === 'antigravity/gemini-4-argon-low' ||
-    config.cronIntervalMin === 60
+    config.cronIntervalMin === 30
   ) {
     config = await prisma.systemConfig.update({
       where: { id: 'default' },
       data: {
         omnirouteModel: 'antigravity/gemini-3.8-flash-low',
-        cronIntervalMin: 30,
+        cronIntervalMin: 60,
       },
     });
   }
@@ -1026,24 +1027,40 @@ export async function saveSynthesizedStoryIfUnique(
 }
 
 let isHourlyCycleRunning = false;
+let lastNewsCycleAt = 0;
 
 /**
- * Full Hourly Editorial Cycle:
+ * Full Editorial Cycle (scheduled according to time window):
+ * - 00h00–05h00: AI Rest period (no synthesis)
+ * - 05h01–18h00: Every 1 hour
+ * - 18h01–23h59: Every 2 hours
+ *
  * 1. Purges stories older than 7 days (1 week).
  * 2. Discovers the Top 5 most talked-about trending topics right now (Google Trends + X/Twitter + Top Media) and generates 5 flagship stories.
  * 3. Generates at least 2 distinct stories for every single platform category (technology, science, politics, crime, sports, entertainment, economics, videogames).
  */
-export async function runHourlyEditorialCycle(): Promise<{
+export async function runHourlyEditorialCycle(options?: { force?: boolean }): Promise<{
   deletedExpired: number;
   trendingGenerated: number;
   categoryGenerated: number;
 }> {
+  if (!options?.force) {
+    if (isAiRestPeriod()) {
+      return { deletedExpired: 0, trendingGenerated: 0, categoryGenerated: 0 };
+    }
+    const intervalMs = getNewsUpdateIntervalMs();
+    if (!intervalMs || (lastNewsCycleAt > 0 && Date.now() - lastNewsCycleAt < intervalMs)) {
+      return { deletedExpired: 0, trendingGenerated: 0, categoryGenerated: 0 };
+    }
+  }
+
   if (isHourlyCycleRunning) {
     console.log('[Hourly Cycle] Cycle already in progress, skipping overlapping trigger.');
     return { deletedExpired: 0, trendingGenerated: 0, categoryGenerated: 0 };
   }
 
   isHourlyCycleRunning = true;
+  lastNewsCycleAt = Date.now();
   let deletedExpired = 0;
   let trendingGenerated = 0;
   let categoryGenerated = 0;

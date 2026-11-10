@@ -1,5 +1,6 @@
 import { createOmniRouteClient } from './omnirouteService';
 import { searchWebNews } from './searchTools';
+import { getFinanceUpdateIntervalMs, isAiRestPeriod } from './aiScheduleService';
 
 export interface MarketQuote {
   symbol: string;
@@ -34,7 +35,7 @@ export interface FinanceSnapshot {
   sources: Array<{ name: string; url: string }>;
 }
 
-const CACHE_TTL_MS = 90 * 1000; // 90 segundos
+const DEFAULT_FINANCE_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas
 
 interface CatalogItem {
   symbol: string;
@@ -90,6 +91,7 @@ const FINANCE_CATALOG: CatalogItem[] = [
 ];
 
 let snapshotCache: FinanceSnapshot | null = null;
+let lastAiRefreshAt = 0;
 let refreshingPromise: Promise<FinanceSnapshot | null> | null = null;
 
 /**
@@ -370,12 +372,28 @@ function getBaselineSnapshot(): FinanceSnapshot {
 }
 
 export async function refreshFinanceSnapshot(): Promise<FinanceSnapshot | null> {
+  if (isAiRestPeriod()) {
+    if (!snapshotCache) snapshotCache = getBaselineSnapshot();
+    return snapshotCache;
+  }
+
+  const intervalMs = getFinanceUpdateIntervalMs();
+  if (!intervalMs) {
+    if (!snapshotCache) snapshotCache = getBaselineSnapshot();
+    return snapshotCache;
+  }
+
+  if (lastAiRefreshAt > 0 && Date.now() - lastAiRefreshAt < intervalMs) {
+    return snapshotCache;
+  }
+
   if (refreshingPromise) return refreshingPromise;
 
   refreshingPromise = buildAiFinanceSnapshot()
     .then((snap) => {
       if (snap) {
         snapshotCache = snap;
+        lastAiRefreshAt = Date.now();
       } else if (!snapshotCache) {
         snapshotCache = getBaselineSnapshot();
       }
@@ -395,17 +413,23 @@ export async function refreshFinanceSnapshot(): Promise<FinanceSnapshot | null> 
 
 /**
  * Returns the cached financial snapshot immediately (<5ms, never blocks the HTTP response).
- * Asynchronously triggers an AI market update in the background when expired or missing.
+ * Asynchronously triggers an AI market update in the background when expired or missing (respecting 00h-05h rest and 2h interval).
  */
 export function getFinanceSnapshot(): FinanceSnapshot | null {
   if (!snapshotCache) {
     snapshotCache = getBaselineSnapshot();
-    void refreshFinanceSnapshot();
+    if (!isAiRestPeriod()) {
+      void refreshFinanceSnapshot();
+    }
     return snapshotCache;
   }
 
-  const age = Date.now() - new Date(snapshotCache.updatedAt).getTime();
-  if (age > CACHE_TTL_MS) {
+  if (isAiRestPeriod()) {
+    return snapshotCache;
+  }
+
+  const intervalMs = getFinanceUpdateIntervalMs() ?? DEFAULT_FINANCE_TTL_MS;
+  if (lastAiRefreshAt === 0 || Date.now() - lastAiRefreshAt >= intervalMs) {
     void refreshFinanceSnapshot();
   }
 

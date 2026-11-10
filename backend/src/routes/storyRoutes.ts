@@ -15,6 +15,7 @@ import {
 } from '../services/omnirouteService';
 import { CATEGORY_QUERIES, fetchDistinctCategoryTopics } from '../services/searchTools';
 import { ensureSeededStories } from '../services/seedService';
+import { isAiRestPeriod } from '../services/aiScheduleService';
 import { authenticateToken, AuthRequest } from './authRoutes';
 
 const router = Router();
@@ -163,7 +164,7 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
       .filter(([k, pts]) => !k.startsWith('tag:') && pts >= 10 && CATEGORY_QUERIES[k])
       .sort((a, b) => b[1] - a[1]);
 
-    if (sortedAffinities.length > 0) {
+    if (sortedAffinities.length > 0 && !isAiRestPeriod()) {
       const topCategory = sortedAffinities[0][0];
       const countForTopCategory = allStories.filter((s) => s.category === topCategory).length;
 
@@ -292,8 +293,8 @@ router.get('/stories', async (req: Request, res: Response) => {
       }
     }
 
-    // Proactive AI synthesis: if 24h session is requested and has fewer than 2 stories, synthesize fresh 24h news in background
-    if (is24h && stories.length < 2 && !activeRecommendationJobs.has('last_24h')) {
+    // Proactive AI synthesis: if 24h session is requested and has fewer than 2 stories, synthesize fresh 24h news in background (outside 00h-05h rest period)
+    if (is24h && !isAiRestPeriod() && stories.length < 2 && !activeRecommendationJobs.has('last_24h')) {
       activeRecommendationJobs.add('last_24h');
       synthesize24hBreakingStory({ lang: lang === 'en' ? 'en' : 'pt' })
         .then((generated) => saveSynthesizedStoryIfUnique(generated))
@@ -732,9 +733,15 @@ router.put('/omniroute/config', async (req: Request, res: Response) => {
 // POST /api/stories/run-hourly-cycle - Trigger the full hourly cycle (7-day cleanup + 5 trending + 2 per category)
 router.post('/stories/run-hourly-cycle', async (_req: Request, res: Response) => {
   try {
+    if (isAiRestPeriod()) {
+      res.status(403).json({
+        error: 'A IA está em período de descanso (00h às 05h). Tente novamente a partir das 05h01.',
+      });
+      return;
+    }
     const deletedExpired = await purgeExpiredStories(7);
     // Run the full synthesis batch asynchronously so the HTTP request returns immediately
-    runHourlyEditorialCycle().catch((err) =>
+    runHourlyEditorialCycle({ force: true }).catch((err) =>
       console.warn('[Manual Hourly Cycle] Error:', (err as Error).message)
     );
     res.json({

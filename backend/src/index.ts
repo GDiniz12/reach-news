@@ -19,6 +19,11 @@ import {
   reclassifyAllExistingStories,
   repairExistingStoryImages,
 } from './services/omnirouteService';
+import {
+  isAiRestPeriod,
+  getBrtTime,
+  SCHEDULE_TIMEZONE,
+} from './services/aiScheduleService';
 
 const app = express();
 const PORT = Number(process.env.PORT || 4001);
@@ -35,31 +40,64 @@ app.use(['/api', '/reach/api'], sportsRoutes);
 app.use(['/api', '/reach/api'], financeRoutes);
 app.use(['/api', '/reach/api'], storyRoutes);
 
-// Sports hub: refresh scores/standings every minute (ESPN structured data + AI highlights)
-cron.schedule('* * * * *', () => {
-  void refreshSportsSnapshot();
-});
+// ============================================================================
+// AGENDAMENTO DE FREQUÊNCIA DA IA (Fuso Horário: America/Sao_Paulo)
+// - 00h00 às 05h00: Descanso total da IA (Esportes, Dados Financeiros e Notícias pausados).
+// - 05h01 às 18h00:
+//   • Notícias: a cada 1 hora
+//   • Dados Financeiros: de 2 em 2 horas
+//   • Esportes: de 45 em 45 min das 05h01 às 12h00; modo ativo das 12h01 às 18h00
+// - 18h01 às 23h59:
+//   • Notícias: a cada 2 horas
+//   • Dados Financeiros: de 2 em 2 horas
+//   • Esportes: modo ativo (atualização a cada minuto)
+// ============================================================================
 
-// Finance hub: refresh financial market data every 2 minutes
-cron.schedule('*/2 * * * *', () => {
-  void refreshFinanceSnapshot();
-});
+// Sports hub:
+// - 00h00–05h00: bloqueado pelo isAiRestPeriod()
+// - 05h01–12h00: getSportsIntervalsMs() aplica intervalo mínimo de 45 minutos
+// - 12h01–23h59: modo ativo (atualização a cada minuto)
+cron.schedule(
+  '* * * * *',
+  () => {
+    if (isAiRestPeriod()) return;
+    void refreshSportsSnapshot();
+  },
+  { timezone: SCHEDULE_TIMEZONE }
+);
 
-// Background Scheduler: Runs every 30 minutes ('*/30 * * * *')
-// 1. Deletes stories older than 7 days (1 week)
-// 2. Discovers Top 5 most talked-about trending topics (Google Trends + X/Twitter + Top Media) & generates 5 stories
-// 3. Generates at least 2 stories for each platform category (technology, science, politics, crime, sports, entertainment, economics, videogames)
-cron.schedule('*/30 * * * *', async () => {
-  try {
-    const config = await getSystemConfig();
-    if (!config.cronEnabled) return;
+// Finance hub:
+// - 00h00–05h00: descanso
+// - 05h01–23h59: consultado de 2 em 2 horas (verificado pelo TTL de 2h em refreshFinanceSnapshot)
+cron.schedule(
+  '* * * * *',
+  () => {
+    if (isAiRestPeriod()) return;
+    void refreshFinanceSnapshot();
+  },
+  { timezone: SCHEDULE_TIMEZONE }
+);
 
-    console.log('[Cron] Starting 30-min editorial cycle (5 Trending + 2 per category + 7-day retention cleanup)...');
-    await runHourlyEditorialCycle();
-  } catch (err) {
-    console.warn('[Cron] Error in scheduled 30-min editorial cycle:', (err as Error).message);
-  }
-});
+// Notícias (Ciclo Editorial da IA):
+// - 00h00–05h00: descanso
+// - 05h01–18h00: acionado a cada 1 hora
+// - 18h01–23h59: acionado a cada 2 horas
+// (O controle exato de 1h vs 2h e bloqueio 00h-05h também é validado dentro de runHourlyEditorialCycle)
+cron.schedule(
+  '* * * * *',
+  async () => {
+    try {
+      if (isAiRestPeriod()) return;
+      const config = await getSystemConfig();
+      if (!config.cronEnabled) return;
+
+      await runHourlyEditorialCycle();
+    } catch (err) {
+      console.warn('[Cron] Error in scheduled editorial cycle:', (err as Error).message);
+    }
+  },
+  { timezone: SCHEDULE_TIMEZONE }
+);
 
 async function bootstrap() {
   try {
@@ -70,8 +108,14 @@ async function bootstrap() {
 
     // 2. Perform background startup tasks (config, seed, duplicates check) asynchronously
     await getSystemConfig();
-    void refreshSportsSnapshot(); // aquece o cache esportivo logo na inicialização
-    void refreshFinanceSnapshot(); // aquece o cache financeiro logo na inicialização
+    if (!isAiRestPeriod()) {
+      void refreshSportsSnapshot(); // aquece o cache esportivo logo na inicialização (fora do horário de descanso)
+      void refreshFinanceSnapshot(); // aquece o cache financeiro logo na inicialização (fora do horário de descanso)
+    } else {
+      console.log(
+        `[Schedule] Horário de descanso da IA ativo (${getBrtTime().formatted} BRT - 00h às 05h). Atualizações automáticas aguardando 05h01.`
+      );
+    }
     await purgeExpiredStories(7);
     await ensureSeededStories();
     await cleanExistingDuplicateStories();

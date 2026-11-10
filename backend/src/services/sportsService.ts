@@ -1,4 +1,5 @@
 import { createOmniRouteClient } from './omnirouteService';
+import { getSportsIntervalsMs, isAiRestPeriod } from './aiScheduleService';
 
 /**
  * Fonte estruturada: endpoints JSON públicos da ESPN (placares, horários, escudos, tabelas).
@@ -99,15 +100,12 @@ const SOCCER_LEAGUES: SoccerLeague[] = [
   { slug: 'uefa.europa', name: 'Europa League', group: 'sport_champions', standings: true },
   { slug: 'uefa.europa.conf', name: 'Conference League', group: 'sport_champions', standings: false },
 ];
-const MATCH_TTL_MS = 60 * 1000;
-const STANDINGS_TTL_MS = 20 * 60 * 1000;
-const HIGHLIGHTS_TTL_MS = 10 * 60 * 1000;
-
 let matchesCache: { at: number; data: SportsMatch[] } | null = null;
 let standingsCache: { at: number; data: StandingTable[] } | null = null;
 const highlightsCache = new Map<string, { at: number; key: string; data: string[] }>();
 let refreshing: Promise<SportsSnapshot | null> | null = null;
 let lastSnapshot: SportsSnapshot | null = null;
+let lastRefreshAt = 0;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 async function getJson(url: string): Promise<any | null> {
@@ -319,7 +317,7 @@ async function fetchStandings(): Promise<StandingTable[]> {
 }
 
 /** IA narra grupos com destaques de UM subtema usando apenas os dados já verificados acima. */
-async function highlightsFor(groupId: string, matches: SportsMatch[]): Promise<string[]> {
+async function highlightsFor(groupId: string, matches: SportsMatch[], highlightsTtlMs: number): Promise<string[]> {
   const relevant = matches
     .filter((m) => m.status !== 'scheduled')
     .slice(0, 20)
@@ -331,7 +329,8 @@ async function highlightsFor(groupId: string, matches: SportsMatch[]): Promise<s
   if (!relevant.length) return [];
   const key = relevant.join('|');
   const cached = highlightsCache.get(groupId);
-  if (cached && cached.key === key && Date.now() - cached.at < HIGHLIGHTS_TTL_MS) return cached.data;
+  if (cached && cached.key === key && Date.now() - cached.at < highlightsTtlMs) return cached.data;
+  if (isAiRestPeriod()) return cached?.data || [];
 
   try {
     const { client, config } = await createOmniRouteClient();
@@ -375,18 +374,25 @@ async function highlightsFor(groupId: string, matches: SportsMatch[]): Promise<s
   return cached?.data || [];
 }
 
-async function buildHighlights(matches: SportsMatch[]): Promise<Record<string, string[]>> {
+async function buildHighlights(matches: SportsMatch[], highlightsTtlMs: number): Promise<Record<string, string[]>> {
   const groups = Array.from(new Set(matches.map((m) => m.group)));
   const entries = await Promise.all(
-    groups.map(async (g) => [g, await highlightsFor(g, matches.filter((m) => m.group === g))] as const)
+    groups.map(async (g) => [g, await highlightsFor(g, matches.filter((m) => m.group === g), highlightsTtlMs)] as const)
   );
   const out: Record<string, string[]> = {};
   for (const [g, list] of entries) if (list.length) out[g] = list;
   return out;
 }
+
 async function buildSnapshot(): Promise<SportsSnapshot | null> {
-  const needMatches = !matchesCache || Date.now() - matchesCache.at > MATCH_TTL_MS;
-  const needStandings = !standingsCache || Date.now() - standingsCache.at > STANDINGS_TTL_MS;
+  const intervals = getSportsIntervalsMs();
+  if (!intervals) {
+    return lastSnapshot;
+  }
+
+  const { matchTtlMs, standingsTtlMs, highlightsTtlMs } = intervals;
+  const needMatches = !matchesCache || Date.now() - matchesCache.at > matchTtlMs;
+  const needStandings = !standingsCache || Date.now() - standingsCache.at > standingsTtlMs;
 
   if (needMatches) {
     const data = await fetchMatches();
@@ -401,8 +407,8 @@ async function buildSnapshot(): Promise<SportsSnapshot | null> {
   const standings = standingsCache?.data || [];
   if (!matches.length && !standings.length) return null;
 
-  const highlights = await buildHighlights(matches);
-  console.log(`[Sports] Snapshot: ${matches.length} jogos, ${standings.length} tabelas, ${highlights.length} grupos com destaques`);
+  const highlights = await buildHighlights(matches, highlightsTtlMs);
+  console.log(`[Sports] Snapshot: ${matches.length} jogos, ${standings.length} tabelas, ${Object.keys(highlights).length} grupos com destaques`);
 
   return {
     matches,
@@ -414,10 +420,26 @@ async function buildSnapshot(): Promise<SportsSnapshot | null> {
 }
 
 export async function refreshSportsSnapshot(): Promise<SportsSnapshot | null> {
+  if (isAiRestPeriod()) {
+    return lastSnapshot;
+  }
+
+  const intervals = getSportsIntervalsMs();
+  if (!intervals) {
+    return lastSnapshot;
+  }
+
+  if (lastRefreshAt > 0 && Date.now() - lastRefreshAt < intervals.matchTtlMs) {
+    return lastSnapshot;
+  }
+
   if (refreshing) return refreshing;
   refreshing = buildSnapshot()
     .then((snap) => {
-      if (snap) lastSnapshot = snap;
+      if (snap) {
+        lastSnapshot = snap;
+        lastRefreshAt = Date.now();
+      }
       return snap;
     })
     .catch((err) => {
@@ -430,9 +452,18 @@ export async function refreshSportsSnapshot(): Promise<SportsSnapshot | null> {
   return refreshing;
 }
 
-/** Retorna o cache na hora (nunca bloqueia); atualiza em segundo plano quando vencido. */
+/** Retorna o cache na hora (nunca bloqueia); atualiza em segundo plano quando vencido (respeitando descanso 00h-05h e janela 45min das 05h01-12h). */
 export function getSportsSnapshot(): SportsSnapshot | null {
-  if (!lastSnapshot || Date.now() - new Date(lastSnapshot.updatedAt).getTime() > MATCH_TTL_MS) {
+  if (isAiRestPeriod()) {
+    return lastSnapshot;
+  }
+
+  const intervals = getSportsIntervalsMs();
+  if (!intervals) {
+    return lastSnapshot;
+  }
+
+  if (!lastSnapshot || lastRefreshAt === 0 || Date.now() - lastRefreshAt >= intervals.matchTtlMs) {
     void refreshSportsSnapshot();
   }
   return lastSnapshot;
