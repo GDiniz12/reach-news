@@ -120,6 +120,30 @@ router.post('/signin', async (req: Request, res: Response) => {
   }
 });
 
+const SAVED_STORY_CARD_SELECT = {
+  id: true,
+  slug: true,
+  category: true,
+  topicTagPt: true,
+  topicTagEn: true,
+  titlePt: true,
+  titleEn: true,
+  summaryPt: true,
+  summaryEn: true,
+  bulletPointsPt: true,
+  bulletPointsEn: true,
+  perspectivesPt: true,
+  perspectivesEn: true,
+  imageUrl: true,
+  dominantColor: true,
+  secondaryColor: true,
+  articleCount: true,
+  isRadarGenerated: true,
+  radarQuery: true,
+  publishedAt: true,
+  sources: true,
+} as const;
+
 router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
@@ -128,7 +152,7 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
         savedStories: {
           include: {
             story: {
-              include: { sources: true },
+              select: SAVED_STORY_CARD_SELECT,
             },
           },
           orderBy: { createdAt: 'desc' },
@@ -228,7 +252,10 @@ router.post('/interactions', authenticateToken, async (req: AuthRequest, res: Re
     const catKey = String(category).toLowerCase().trim();
     const tagKey = topicTag ? String(topicTag).toLowerCase().trim() : '';
 
-    const user = (await prisma.user.findUnique({ where: { id: req.userId } })) as any;
+    const user = (await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { id: true, affinityMap: true },
+    })) as any;
     if (!user) {
       res.status(404).json({ error: 'Usuário não encontrado.' });
       return;
@@ -246,6 +273,7 @@ router.post('/interactions', authenticateToken, async (req: AuthRequest, res: Re
     await prisma.user.update({
       where: { id: req.userId },
       data: { affinityMap: currentAffinity } as any,
+      select: { id: true },
     });
 
     try {
@@ -258,6 +286,7 @@ router.post('/interactions', authenticateToken, async (req: AuthRequest, res: Re
           eventType: String(eventType),
           weight: points,
         },
+        select: { id: true },
       });
     } catch {
       // Non-blocking if prisma client wasn't regenerated in memory yet

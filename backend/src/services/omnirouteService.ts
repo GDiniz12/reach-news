@@ -67,7 +67,25 @@ const VIBRANT_PALETTES = [
   { dominant: '#c2410c', secondary: '#7c2d12' },
 ];
 
-export async function getSystemConfig() {
+let systemConfigCache: { at: number; data: any } | null = null;
+const SYSTEM_CONFIG_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes in-memory cache to prevent DB queries every minute
+
+let storiesCacheVersion = 1;
+export function getStoriesCacheVersion(): number {
+  return storiesCacheVersion;
+}
+export function bumpStoriesCacheVersion(): void {
+  storiesCacheVersion++;
+}
+export function invalidateSystemConfigCache(): void {
+  systemConfigCache = null;
+}
+
+export async function getSystemConfig(forceRefresh = false) {
+  if (!forceRefresh && systemConfigCache && Date.now() - systemConfigCache.at < SYSTEM_CONFIG_CACHE_TTL_MS) {
+    return systemConfigCache.data;
+  }
+
   let config = await prisma.systemConfig.findUnique({ where: { id: 'default' } });
   if (!config) {
     config = await prisma.systemConfig.create({
@@ -96,6 +114,8 @@ export async function getSystemConfig() {
       },
     });
   }
+
+  systemConfigCache = { at: Date.now(), data: config };
   return config;
 }
 
@@ -343,7 +363,7 @@ export async function researchAndSynthesizeStory(params: {
   const recentStories = await prisma.story.findMany({
     where: { publishedAt: { gte: recentCutoff } },
     select: { titlePt: true, imageUrl: true },
-    take: 150,
+    take: 80,
     orderBy: { publishedAt: 'desc' },
   });
 
@@ -891,6 +911,7 @@ export async function purgeExpiredStories(retentionDays = 7): Promise<number> {
     },
   });
   if (deleted.count > 0) {
+    bumpStoriesCacheVersion();
     console.log(
       `[Retention Cleanup] Removed ${deleted.count} stories older than ${retentionDays} days (published before ${cutoffDate.toISOString()}).`
     );
@@ -907,13 +928,21 @@ export async function saveSynthesizedStoryIfUnique(
   options?: { allowReturnExisting?: boolean }
 ): Promise<{ story: any; isDuplicate: boolean; reason?: string }> {
   const { client, config } = await createOmniRouteClient();
-  // Check against ALL stories currently active in the database (within full 7-day retention window)
+  // Check against stories currently active in the database using strict SELECT (no fullArticle text columns to save Egress!)
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const recentStories = await prisma.story.findMany({
     where: { publishedAt: { gte: sevenDaysAgo } },
-    include: { sources: { select: { url: true } } },
-    take: 200,
+    select: {
+      id: true,
+      titlePt: true,
+      summaryPt: true,
+      category: true,
+      publishedAt: true,
+      imageUrl: true,
+      sources: { select: { url: true } },
+    },
+    take: 100,
     orderBy: { publishedAt: 'desc' },
   });
 
@@ -933,7 +962,29 @@ export async function saveSynthesizedStoryIfUnique(
     if (options?.allowReturnExisting && dupCheck.duplicateOf) {
       const fullExisting = await prisma.story.findUnique({
         where: { id: dupCheck.duplicateOf.id },
-        include: { sources: true },
+        select: {
+          id: true,
+          slug: true,
+          category: true,
+          topicTagPt: true,
+          topicTagEn: true,
+          titlePt: true,
+          titleEn: true,
+          summaryPt: true,
+          summaryEn: true,
+          bulletPointsPt: true,
+          bulletPointsEn: true,
+          perspectivesPt: true,
+          perspectivesEn: true,
+          imageUrl: true,
+          dominantColor: true,
+          secondaryColor: true,
+          articleCount: true,
+          isRadarGenerated: true,
+          radarQuery: true,
+          publishedAt: true,
+          sources: true,
+        },
       });
       return { story: fullExisting, isDuplicate: true, reason: dupCheck.reason };
     }
@@ -1018,11 +1069,32 @@ export async function saveSynthesizedStoryIfUnique(
         })),
       },
     },
-    include: {
+    select: {
+      id: true,
+      slug: true,
+      category: true,
+      topicTagPt: true,
+      topicTagEn: true,
+      titlePt: true,
+      titleEn: true,
+      summaryPt: true,
+      summaryEn: true,
+      bulletPointsPt: true,
+      bulletPointsEn: true,
+      perspectivesPt: true,
+      perspectivesEn: true,
+      imageUrl: true,
+      dominantColor: true,
+      secondaryColor: true,
+      articleCount: true,
+      isRadarGenerated: true,
+      radarQuery: true,
+      publishedAt: true,
       sources: true,
     },
   });
 
+  bumpStoriesCacheVersion();
   return { story: saved, isDuplicate: false };
 }
 
@@ -1287,7 +1359,14 @@ export async function repairExistingStoryImages(): Promise<{
   repaired: number;
 }> {
   const stories = await prisma.story.findMany({
-    include: { sources: true },
+    select: {
+      id: true,
+      titlePt: true,
+      category: true,
+      imageUrl: true,
+      radarQuery: true,
+      publishedAt: true,
+    },
     orderBy: { publishedAt: 'desc' },
   });
 
@@ -1314,7 +1393,20 @@ export async function repairExistingStoryImages(): Promise<{
     }
 
     if (isLowQuality || isDuplicate || isMismatchedUnsplash) {
-      const rawItems: RawNewsItem[] = (story.sources || []).map((s) => ({
+      // Only fetch sources for the specific story that actually needs image repair
+      const storySources = await prisma.storySource.findMany({
+        where: { storyId: story.id },
+        select: {
+          title: true,
+          url: true,
+          name: true,
+          domain: true,
+          publishedAt: true,
+          snippet: true,
+        },
+      });
+
+      const rawItems: RawNewsItem[] = storySources.map((s) => ({
         title: s.title,
         url: s.url,
         sourceName: s.name,
@@ -1350,6 +1442,7 @@ export async function repairExistingStoryImages(): Promise<{
   }
 
   if (repaired > 0) {
+    bumpStoriesCacheVersion();
     console.log(`[ImageRepair] Scanned ${stories.length} stories and repaired ${repaired} images.`);
   }
   return { scanned: stories.length, repaired };

@@ -487,7 +487,6 @@ export async function reclassifyAllExistingStories(): Promise<{ reclassifiedCoun
         topicTagPt: true,
         titlePt: true,
         summaryPt: true,
-        fullArticlePt: true,
       },
     });
 
@@ -498,7 +497,6 @@ export async function reclassifyAllExistingStories(): Promise<{ reclassifiedCoun
       const classification = classifyStoryCategory({
         title: story.titlePt,
         summary: story.summaryPt,
-        content: story.fullArticlePt,
         hintCategory: story.category,
       });
 

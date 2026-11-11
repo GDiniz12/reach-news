@@ -12,6 +12,9 @@ import {
   runHourlyEditorialCycle,
   purgeExpiredStories,
   planSmartSearchAngles,
+  getStoriesCacheVersion,
+  bumpStoriesCacheVersion,
+  invalidateSystemConfigCache,
 } from '../services/omnirouteService';
 import { CATEGORY_QUERIES, fetchDistinctCategoryTopics } from '../services/searchTools';
 import { ensureSeededStories } from '../services/seedService';
@@ -22,6 +25,36 @@ const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'reach-news-super-secret-jwt-key-2026';
 
 const activeRecommendationJobs = new Set<string>();
+
+// In-memory cache for feed queries to prevent redundant PostgreSQL Egress on page loads & tab switches
+const FEED_CACHE_TTL_MS = 60 * 1000; // 60 seconds (auto-invalidated immediately whenever a story is created/updated/deleted)
+const feedListCache = new Map<string, { at: number; version: number; data: any[] }>();
+let forYouCandidateCache: { at: number; version: number; data: any[] } | null = null;
+
+// Feed list selection fields (omits giant fullArticle markdown to maximize performance and prevent database Egress spikes)
+export const FEED_STORY_SELECT = {
+  id: true,
+  slug: true,
+  category: true,
+  topicTagPt: true,
+  topicTagEn: true,
+  titlePt: true,
+  titleEn: true,
+  summaryPt: true,
+  summaryEn: true,
+  bulletPointsPt: true,
+  bulletPointsEn: true,
+  perspectivesPt: true,
+  perspectivesEn: true,
+  imageUrl: true,
+  dominantColor: true,
+  secondaryColor: true,
+  articleCount: true,
+  isRadarGenerated: true,
+  radarQuery: true,
+  publishedAt: true,
+  sources: true,
+} as const;
 
 const SUBINTEREST_TO_PARENT_CATEGORY: Record<string, string> = {
   artificial_intelligence: 'technology',
@@ -51,8 +84,11 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
     let userInterests: string[] = [];
     let affinityMap: Record<string, number> = {};
 
-    // 1. Load authenticated user's interests & affinityMap from PostgreSQL
-    const user = (await prisma.user.findUnique({ where: { id: req.userId } })) as any;
+    // 1. Load authenticated user's interests & affinityMap from PostgreSQL (minimal select)
+    const user = (await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { interests: true, affinityMap: true },
+    })) as any;
     if (user) {
       userInterests = Array.isArray(user.interests) ? user.interests : [];
       affinityMap =
@@ -83,12 +119,27 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
       }
     }
 
-    // 3. Fetch recent stories from PostgreSQL
-    const allStories = await prisma.story.findMany({
-      include: { sources: true },
-      orderBy: { publishedAt: 'desc' },
-      take: 80,
-    });
+    // 3. Fetch recent stories using FEED_STORY_SELECT (omits fullArticlePt/En) + 60s in-memory cache
+    const currentVersion = getStoriesCacheVersion();
+    let allStories: any[];
+    if (
+      forYouCandidateCache &&
+      forYouCandidateCache.version === currentVersion &&
+      Date.now() - forYouCandidateCache.at < FEED_CACHE_TTL_MS
+    ) {
+      allStories = forYouCandidateCache.data;
+    } else {
+      allStories = await prisma.story.findMany({
+        select: FEED_STORY_SELECT,
+        orderBy: { publishedAt: 'desc' },
+        take: 45,
+      });
+      forYouCandidateCache = {
+        at: Date.now(),
+        version: currentVersion,
+        data: allStories,
+      };
+    }
 
     // 4. Score and rank every story using our Adaptive Recommendation Algorithm
     const now = Date.now();
@@ -200,31 +251,6 @@ router.get('/stories/for-you', authenticateToken, async (req: AuthRequest, res: 
   }
 });
 
-// Feed list selection fields (omits giant fullArticle markdown to maximize performance and prevent payload timeouts)
-const FEED_STORY_SELECT = {
-  id: true,
-  slug: true,
-  category: true,
-  topicTagPt: true,
-  topicTagEn: true,
-  titlePt: true,
-  titleEn: true,
-  summaryPt: true,
-  summaryEn: true,
-  bulletPointsPt: true,
-  bulletPointsEn: true,
-  perspectivesPt: true,
-  perspectivesEn: true,
-  imageUrl: true,
-  dominantColor: true,
-  secondaryColor: true,
-  articleCount: true,
-  isRadarGenerated: true,
-  radarQuery: true,
-  publishedAt: true,
-  sources: true,
-} as const;
-
 // GET /api/stories - List stories with optional category, 24h timeframe, or search filter
 router.get('/stories', async (req: Request, res: Response) => {
   try {
@@ -232,6 +258,19 @@ router.get('/stories', async (req: Request, res: Response) => {
 
     const catKey = category ? String(category).toLowerCase().trim() : undefined;
     const is24h = catKey === 'last_24h' || timeframe === '24h';
+    const hasSearchQuery = Boolean(q && String(q).trim().length > 0);
+    const cacheKey = `${catKey || 'popular'}:${is24h ? '24h' : 'all'}:${limit}`;
+    const currentVersion = getStoriesCacheVersion();
+
+    // Serve from in-memory cache if available and not a custom search query
+    if (!hasSearchQuery) {
+      const cached = feedListCache.get(cacheKey);
+      if (cached && cached.version === currentVersion && Date.now() - cached.at < FEED_CACHE_TTL_MS && cached.data.length > 0) {
+        res.json({ stories: cached.data });
+        return;
+      }
+    }
+
     const where: Record<string, unknown> = {};
 
     if (is24h) {
@@ -244,7 +283,7 @@ router.get('/stories', async (req: Request, res: Response) => {
       where.category = catKey;
     }
 
-    if (q && String(q).trim().length > 0) {
+    if (hasSearchQuery) {
       const search = String(q).trim();
       const keywords = search
         .split(/\s+/)
@@ -280,17 +319,26 @@ router.get('/stories', async (req: Request, res: Response) => {
     });
 
     // Self-healing fallback: If popular/initial feed has 0 stories, auto-seed and return stories
-    if (stories.length === 0 && (!catKey || catKey === 'popular' || catKey === 'all') && !q) {
+    if (stories.length === 0 && (!catKey || catKey === 'popular' || catKey === 'all') && !hasSearchQuery) {
       const count = await prisma.story.count();
       if (count === 0) {
         console.log('[GET /stories] Database empty on popular feed. Auto-populating initial seed stories...');
         await ensureSeededStories();
+        bumpStoriesCacheVersion();
         stories = await prisma.story.findMany({
           select: FEED_STORY_SELECT,
           orderBy: { publishedAt: 'desc' },
           take: Number(limit),
         });
       }
+    }
+
+    if (!hasSearchQuery && stories.length > 0) {
+      feedListCache.set(cacheKey, {
+        at: Date.now(),
+        version: getStoriesCacheVersion(),
+        data: stories,
+      });
     }
 
     // Proactive AI synthesis: if 24h session is requested and has fewer than 2 stories, synthesize fresh 24h news in background (outside 00h-05h rest period)
@@ -520,7 +568,7 @@ router.post('/stories/refresh-category', async (req: Request, res: Response) => 
     if (!finalStory) {
       finalStory = await prisma.story.findFirst({
         where: catKey !== 'popular' && catKey !== 'all' ? { category: catKey } : {},
-        include: { sources: true },
+        select: FEED_STORY_SELECT,
         orderBy: { publishedAt: 'desc' },
       });
     }
@@ -722,6 +770,7 @@ router.put('/omniroute/config', async (req: Request, res: Response) => {
         cronIntervalMin: cronIntervalMin ? Number(cronIntervalMin) : current.cronIntervalMin,
       },
     });
+    invalidateSystemConfigCache();
 
     const status = await checkOmniRouteStatus();
     res.json({ config: updated, status });
